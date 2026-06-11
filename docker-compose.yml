@@ -1,0 +1,20 @@
+services:
+  fasterp:
+    build: .
+    ports:
+      - "5011:5011"
+    environment:
+      FASTERP_DB: /data/fasterp.sqlite
+      FASTERP_PORT: "5011"
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-xai}
+      MODEL_NAME: ${MODEL_NAME:-grok-4-1-fast-reasoning}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      FASTERP_ADMIN_PASSWORD: ${FASTERP_ADMIN_PASSWORD:-FastERP2026$$}
+      FASTERP_SECRET: ${FASTERP_SECRET:-}
+    volumes:
+      - fasterp-data:/data
+volumes:
+  fasterp-data:

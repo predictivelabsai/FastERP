@@ -1,0 +1,21 @@
+# Secrets & local config
+.env
+
+# Database (rebuild with: python seed.py)
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Playwright / scratch
+.playwright-mcp/
+/tmp/
+
+# OS
+.DS_Store

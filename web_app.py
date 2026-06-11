@@ -1,0 +1,199 @@
+"""FastERP — an open-source ERP slice built with FastHTML.
+
+A server-side, HTMX-driven port of ERPNext's Order-to-Cash + Inventory: items &
+stock, customers, sales orders, invoices with AR aging, and an AI assistant
+grounded in the live (synthetic) data.
+
+Run:
+    python web_app.py            # http://localhost:5011
+
+Login: admin@fasterp.example / FastERP2026$  (override via .env)
+"""
+from __future__ import annotations
+
+import os
+import json
+import secrets
+import uuid
+import logging
+
+from dotenv import load_dotenv
+load_dotenv()
+
+from fasthtml.common import (
+    fast_app, serve, Div, H1, P, A, Form, Input, Button, NotStr,
+    RedirectResponse, Script, Style, Link, Title,
+)
+from starlette.responses import StreamingResponse, Response
+
+import db
+from web.layout import page, LAYOUT_CSS
+from web import views, ai
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
+logger = logging.getLogger("fasterp")
+
+VALID_EMAIL = os.getenv("FASTERP_ADMIN_EMAIL", "admin@fasterp.example")
+VALID_PASSWORD = os.getenv("FASTERP_ADMIN_PASSWORD", "FastERP2026$")
+ENV_LABEL = os.getenv("FASTERP_ENV_LABEL", "FastERP")
+SECRET = os.getenv("FASTERP_SECRET", secrets.token_hex(32))
+PORT = int(os.getenv("FASTERP_PORT", "5011"))
+
+app, rt = fast_app(live=False, pico=False, secret_key=SECRET, hdrs=[Style(LAYOUT_CSS)])
+
+
+def _user(session):
+    return session.get("user")
+
+
+def _thread(session):
+    if "thread" not in session:
+        session["thread"] = uuid.uuid4().hex
+    return session["thread"]
+
+
+def _guard(session, active, builder):
+    if not _user(session):
+        return RedirectResponse("/login", status_code=303)
+    content = builder() if callable(builder) else builder
+    if not isinstance(content, tuple):
+        content = (content,)
+    return page(active, ENV_LABEL, _user(session), _thread(session), *content)
+
+
+def _login_card(error="", email=""):
+    return Title("FastERP — Sign in"), Style(LAYOUT_CSS), Div(
+        Form(H1("FastERP"), P("Sign in to your operations workspace"),
+             Input(name="email", type="email", placeholder="Email", value=email, required=True),
+             Input(name="password", type="password", placeholder="Password", required=True),
+             P(error, cls="error") if error else None,
+             Button("Sign in", cls="btn primary", type="submit"),
+             P(NotStr("Demo: <code>admin@fasterp.example</code> / <code>FastERP2026$</code>"), cls="hint"),
+             method="post", action="/login", cls="login-card"), cls="login-wrap")
+
+
+@rt("/login")
+def get(session):
+    if _user(session):
+        return RedirectResponse("/", status_code=303)
+    return _login_card()
+
+
+@rt("/login")
+def post(session, email: str = "", password: str = ""):
+    if email.strip().lower() == VALID_EMAIL.lower() and password == VALID_PASSWORD:
+        session["user"] = email.strip().lower()
+        return RedirectResponse("/", status_code=303)
+    return _login_card("Invalid email or password.", email)
+
+
+@rt("/logout")
+def get(session):
+    session.pop("user", None)
+    return RedirectResponse("/login", status_code=303)
+
+
+@rt("/")
+def get(session):
+    return _guard(session, "dashboard", views.dashboard)
+
+
+@rt("/orders")
+def get(session, status: str = "All", q: str = ""):
+    return _guard(session, "orders", lambda: views.orders_list(status, q))
+
+
+@rt("/orders/{oid}")
+def get(session, oid: int):
+    return _guard(session, "orders", lambda: views.order_detail(oid))
+
+
+@rt("/invoices")
+def get(session, status: str = "All"):
+    return _guard(session, "invoices", lambda: views.invoices_list(status))
+
+
+@rt("/items")
+def get(session, group: str = "All", q: str = ""):
+    return _guard(session, "items", lambda: views.items_list(group, q))
+
+
+@rt("/customers")
+def get(session):
+    return _guard(session, "customers", views.customers_list)
+
+
+@rt("/ai")
+def get(session):
+    body = (views._title("AI Assistant", "Chat lives in the right rail. Ask in plain English or use slash-commands."),
+            Div(NotStr(
+                "<div class='card'><h3>What you can ask</h3><ul style='line-height:1.8;'>"
+                "<li>“How much is outstanding from customers, and how much is overdue?”</li>"
+                "<li>“Which items need reordering?”</li>"
+                "<li>“How are sales orders tracking by status?”</li></ul>"
+                "<p style='color:var(--text-mute)'>Slash-commands (no API key): "
+                "<code>/sales</code> <code>/ar</code> <code>/stock</code> <code>/top</code></p></div>")))
+    return _guard(session, "ai", body)
+
+
+@rt("/guide")
+def get(session):
+    body = (views._title("User Guide", "How to drive FastERP"), Div(NotStr("""
+<div class='card'><h3>Dashboard</h3><p>Revenue, receivables (with overdue), inventory value and low-stock count;
+sales orders by status, AR aging, monthly invoiced sales, and low-stock items.</p></div>
+<div class='card'><h3>Sales Orders</h3><p>Filter by status; open an order for its line items, totals, and linked invoice.</p></div>
+<div class='card'><h3>Invoices (AR)</h3><p>Accounts-receivable list with outstanding amounts and status (Unpaid / Partly Paid / Paid / Overdue).</p></div>
+<div class='card'><h3>Items & Stock</h3><p>Inventory by group with stock levels, value, and a reorder flag.</p></div>
+<div class='card'><h3>AI Assistant</h3><p>The right rail chats over a live ERP snapshot. Set <code>MODEL_PROVIDER</code> + a key in
+<code>.env</code> for free-form chat; slash-commands always work.</p></div>""")))
+    return _guard(session, "guide", body)
+
+
+@rt("/chat/new")
+def get(session):
+    session["thread"] = uuid.uuid4().hex
+    return P("Ask about sales, receivables or stock — or use /sales /ar /stock /help.", cls="chat-empty-hint")
+
+
+@rt("/chat/stream")
+async def post(session, message: str = "", thread_id: str = ""):
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    message = (message or "").strip()
+    if not message:
+        return Response("No message", status_code=400)
+    tid = thread_id or _thread(session)
+
+    async def gen():
+        with db.cursor() as conn:
+            conn.execute("INSERT INTO chat_messages(thread_id,role,content,created) VALUES(?,?,?,datetime('now'))",
+                         (tid, "user", message))
+        full = []
+        async for chunk in ai.stream_chat(message):
+            if chunk.startswith("data: "):
+                try:
+                    tok = json.loads(chunk[6:]).get("token")
+                    if tok:
+                        full.append(tok)
+                except Exception:
+                    pass
+            yield chunk
+        with db.cursor() as conn:
+            conn.execute("INSERT INTO chat_messages(thread_id,role,content,created) VALUES(?,?,?,datetime('now'))",
+                         (tid, "assistant", "".join(full)))
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def _ensure_db():
+    if not db.db_exists():
+        logger.info("No database found — seeding synthetic ERP data…")
+        import seed
+        seed.build()
+
+
+_ensure_db()
+
+if __name__ == "__main__":
+    logger.info("FastERP on http://localhost:%s  (login %s)", PORT, VALID_EMAIL)
+    serve(port=PORT, reload=os.getenv("FASTERP_RELOAD", "0") == "1")
