@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fasthtml.common import (
-    Div, H1, H3, P, Span, A, Table, Thead, Tbody, Tr, Th, Td, Form, Input, NotStr, Strong,
+    Div, H1, H3, P, Span, A, Table, Thead, Tbody, Tr, Th, Td, Form, Input, Button, NotStr, Strong,
 )
 
 import db
@@ -87,28 +87,75 @@ def orders_list(status="All", q=""):
     return _title("Sales Orders", f"{len(orders)} shown"), seg, search, Div(tbl, cls="card")
 
 
-def order_detail(oid):
+_ACTION_LABEL = {"confirm": "✓ Confirm order", "deliver": "🚚 Deliver (decrement stock)",
+                 "invoice": "🧾 Raise invoice"}
+
+
+def _o2c_steps(status):
+    """Render the order-to-cash flow as a progress strip."""
+    flow = ["Draft", "Confirmed", "Delivered", "Invoiced", "Closed"]
+    if status == "Cancelled":
+        return Div(_pill("Cancelled"), cls="o2c")
+    idx = flow.index(status) if status in flow else 0
+    chips = []
+    for i, s in enumerate(flow):
+        cls = "o2c-step done" if i <= idx else "o2c-step"
+        chips.append(Span(s, cls=cls))
+        if i < len(flow) - 1:
+            chips.append(Span("→", cls="o2c-arrow"))
+    return Div(*chips, cls="o2c")
+
+
+def order_main(oid):
     o = db.sales_order(oid)
     if not o:
-        return _title("Order not found"), P("No such order.")
+        return Div(P("No such order."))
     items = db.order_items(oid)
-    inv = db.one("SELECT * FROM invoices WHERE order_id=?", (oid,))
+    inv = db.invoice_for_order(oid)
     lines = Table(Thead(Tr(Th("Item"), Th("Code"), Th("Qty", cls="num"), Th("Rate", cls="num"), Th("Amount", cls="num"))),
                   Tbody(*[Tr(Td(li["item"]), Td(li["code"]), Td(f"{li['qty']:.0f}", cls="num"),
                              Td(money(li["rate"]), cls="num"), Td(money(li["amount"]), cls="num")) for li in items],
                         Tr(Td(""), Td(""), Td(""), Td(Strong("Total"), cls="num"), Td(Strong(money(o["total"])), cls="num"))),
                   cls="tbl")
+
+    # action area — drives the order-to-cash flow
+    action = db.next_action(o)
+    action_bits = [_o2c_steps(o["status"])]
+    if action:
+        action_bits.append(Button(_ACTION_LABEL[action], cls="btn primary",
+                                   **{"hx-post": f"/orders/{oid}/{action}", "hx-target": "#order-main",
+                                      "hx-swap": "innerHTML"}))
+    if inv:
+        outstanding = inv["total"] - inv["paid"]
+        if outstanding > 0.01:
+            action_bits.append(Form(
+                Span(f"Invoice {inv['code']} · {money(outstanding)} outstanding", style="margin-right:8px;color:var(--text-dim);"),
+                Input(type="number", name="amount", value=int(outstanding), step="100", style="width:120px;"),
+                Button("💷 Record payment", cls="btn primary", type="submit"),
+                **{"hx-post": f"/invoices/{inv['id']}/pay", "hx-target": "#order-main", "hx-swap": "innerHTML"},
+                cls="inline-form", style="margin-top:10px;"))
+        else:
+            action_bits.append(Div(f"✓ Invoice {inv['code']} paid in full.", cls="paid-note"))
+    actions = Div(Div(H3("Order-to-cash"), cls="card-header"), *action_bits, cls="card")
+
     info = Div(Div(H3("Order"), cls="card-header"),
                Div(Span("Customer", cls="k"), Span(o["customer"]),
                    Span("Territory", cls="k"), Span(o["territory"] or "—"),
                    Span("Status", cls="k"), _pill(o["status"]),
                    Span("Order date", cls="k"), Span(o["order_date"]),
-                   Span("Delivery", cls="k"), Span(o["delivery_date"]),
                    Span("Invoice", cls="k"),
-                   Span(A(inv["code"], href=f"/invoices") if inv else "Not invoiced"),
+                   Span(A(f"{inv['code']} · {inv['status']}", href="/invoices") if inv else "Not invoiced"),
                    cls="kv"), cls="card")
+    return Div(Div(actions, Div(Div(H3("Line items"), cls="card-header"), lines, cls="card")),
+               info, cls="detail-grid")
+
+
+def order_detail(oid):
+    o = db.sales_order(oid)
+    if not o:
+        return _title("Order not found"), P("No such order.")
     return (_title(o["code"], f"{o['customer']} · {money(o['total'])}", A("← All orders", href="/orders", cls="btn")),
-            Div(Div(Div(H3("Line items"), cls="card-header"), lines, cls="card"), info, cls="detail-grid"))
+            Div(order_main(oid), id="order-main"))
 
 
 # ---------- invoices --------------------------------------------------------

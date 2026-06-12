@@ -64,6 +64,13 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;}
 .seg a.active{background:var(--accent);color:#fff;border-color:var(--accent);}
 .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;}
 .toolbar input[type=search]{padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;min-width:240px;}
+.o2c{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:14px;}
+.o2c-step{font-size:11.5px;padding:3px 10px;border-radius:999px;border:1px solid var(--border);color:var(--text-mute);background:var(--surface);}
+.o2c-step.done{background:var(--accent-light);color:var(--accent-hover);border-color:var(--accent-light);font-weight:600;}
+.o2c-arrow{color:var(--text-mute);font-size:12px;}
+.inline-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.inline-form input{padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;}
+.paid-note{margin-top:10px;color:var(--ok);font-weight:600;font-size:13px;}
 .bar{height:8px;background:var(--surface-2);border-radius:4px;overflow:hidden;} .bar > span{display:block;height:100%;background:var(--accent);}
 .btn{padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;font-size:13px;}
 .btn:hover{background:var(--surface-2);} .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);} .btn.primary:hover{background:var(--accent-hover);} .btn.sm{padding:3px 9px;font-size:12px;}

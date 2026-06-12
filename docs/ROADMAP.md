@@ -19,7 +19,7 @@ that backs it** — and maps the rest here.
 
 ## Near-term roadmap 🔜 (complete the O2C loop)
 
-1. **Write the flow** — currently read-only; add: create order → confirm →
+1. ✅ **Write the flow** (done) — confirm →
    **Delivery Note** (decrements stock) → **Sales Invoice** → **Payment Entry**
    (updates AR), each as an HTMX action.
 2. **Quotations** — `Quotation` → convert to Sales Order.

@@ -108,6 +108,39 @@ def get(session, oid: int):
     return _guard(session, "orders", lambda: views.order_detail(oid))
 
 
+def _ofrag(session, oid):
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    return views.order_main(oid)
+
+
+@rt("/orders/{oid}/confirm")
+def post(session, oid: int):
+    db.confirm_order(oid)
+    return _ofrag(session, oid)
+
+
+@rt("/orders/{oid}/deliver")
+def post(session, oid: int):
+    db.deliver_order(oid)
+    return _ofrag(session, oid)
+
+
+@rt("/orders/{oid}/invoice")
+def post(session, oid: int):
+    db.invoice_order(oid)
+    return _ofrag(session, oid)
+
+
+@rt("/invoices/{inv_id}/pay")
+def post(session, inv_id: int, amount: float = 0):
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    inv = db.one("SELECT order_id FROM invoices WHERE id=?", (inv_id,))
+    db.record_payment(inv_id, amount)
+    return views.order_main(inv["order_id"]) if inv and inv["order_id"] else Response("ok")
+
+
 @rt("/invoices")
 def get(session, status: str = "All"):
     return _guard(session, "invoices", lambda: views.invoices_list(status))

@@ -164,3 +164,69 @@ def sales_order(oid):
 def order_items(oid):
     return rows("""SELECT soi.*, i.name item, i.code FROM sales_order_items soi
                    LEFT JOIN items i ON i.id=soi.item_id WHERE soi.order_id=?""", (oid,))
+
+
+def invoice_for_order(oid):
+    return one("SELECT * FROM invoices WHERE order_id=?", (oid,))
+
+
+# --- order-to-cash transactions ---------------------------------------------
+
+def next_action(order):
+    """The next step in the O2C flow for an order, or None."""
+    return {"Draft": "confirm", "Confirmed": "deliver",
+            "Delivered": "invoice"}.get(order["status"])
+
+
+def confirm_order(oid) -> bool:
+    o = sales_order(oid)
+    if not o or o["status"] != "Draft":
+        return False
+    with cursor() as conn:
+        conn.execute("UPDATE sales_orders SET status='Confirmed' WHERE id=?", (oid,))
+    return True
+
+
+def deliver_order(oid) -> bool:
+    """Confirmed → Delivered: decrement stock and write stock-out moves."""
+    o = sales_order(oid)
+    if not o or o["status"] != "Confirmed":
+        return False
+    with cursor() as conn:
+        for li in conn.execute("SELECT item_id, qty FROM sales_order_items WHERE order_id=?", (oid,)).fetchall():
+            conn.execute("UPDATE items SET stock_qty = MAX(0, stock_qty - ?) WHERE id=?", (li["qty"], li["item_id"]))
+            conn.execute("INSERT INTO stock_moves(item_id,move_date,direction,qty,ref) VALUES (?,date('now'),'Out',?,?)",
+                         (li["item_id"], li["qty"], o["code"]))
+        conn.execute("UPDATE sales_orders SET status='Delivered' WHERE id=?", (oid,))
+    return True
+
+
+def invoice_order(oid) -> int | None:
+    """Delivered → Invoiced: raise a Sales Invoice (Unpaid, due in 30 days)."""
+    o = sales_order(oid)
+    if not o or o["status"] != "Delivered" or invoice_for_order(oid):
+        return None
+    with cursor() as conn:
+        n = (conn.execute("SELECT COALESCE(MAX(id),7000) FROM invoices").fetchone()[0]) + 1
+        conn.execute(
+            """INSERT INTO invoices(code,order_id,customer_id,invoice_date,due_date,total,paid,status)
+               VALUES (?,?,?,date('now'),date('now','+30 day'),?,0,'Unpaid')""",
+            (f"INV-{n}", oid, o["customer_id"], o["total"]))
+        inv_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute("UPDATE sales_orders SET status='Invoiced' WHERE id=?", (oid,))
+    return inv_id
+
+
+def record_payment(invoice_id, amount: float) -> bool:
+    inv = one("SELECT * FROM invoices WHERE id=?", (invoice_id,))
+    if not inv or amount <= 0:
+        return False
+    paid = min(inv["total"], inv["paid"] + amount)
+    # tolerate sub-£1 rounding so a "pay in full" (rounded) settles the invoice
+    status = "Paid" if paid >= inv["total"] - 1.0 else "Partly Paid"
+    with cursor() as conn:
+        conn.execute("UPDATE invoices SET paid=?, status=? WHERE id=?", (paid, status, invoice_id))
+        # Fully paid invoice closes its order
+        if status == "Paid" and inv["order_id"]:
+            conn.execute("UPDATE sales_orders SET status='Closed' WHERE id=?", (inv["order_id"],))
+    return True
