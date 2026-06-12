@@ -31,7 +31,9 @@ def _d(days):
 def build():
     db.init_schema()
     with db.cursor() as conn:
-        for t in ("chat_messages", "stock_moves", "invoices", "sales_order_items", "sales_orders", "items", "customers"):
+        for t in ("chat_messages", "gl_entries", "purchase_order_items", "purchase_orders",
+                  "suppliers", "stock_moves", "invoices", "sales_order_items", "sales_orders",
+                  "items", "customers"):
             conn.execute(f"DELETE FROM {t}")
 
     # customers
@@ -129,9 +131,68 @@ def build():
             "INSERT INTO invoices(code,order_id,customer_id,invoice_date,due_date,total,paid,status) VALUES (?,?,?,?,?,?,?,?)", invoices)
         conn.executemany("INSERT INTO stock_moves(item_id,move_date,direction,qty,ref) VALUES (?,?,?,?,?)", moves)
 
+    # suppliers
+    sup_names = ["Atlas Metals", "Bridgeport Components", "Cedar Industrial", "Delta Polymers",
+                 "Eastgate Trading", "Forge & Co", "Granville Supplies", "Hanseatic Logistics",
+                 "Ironbridge Materials", "Juno Packaging"]
+    sups = [(nm, RNG.choice(TERRITORIES), _d(-RNG.randint(120, 1200))) for nm in sup_names]
+    with db.cursor() as conn:
+        conn.executemany("INSERT INTO suppliers(name,territory,created) VALUES (?,?,?)", sups)
+        sup_ids = [r[0] for r in conn.execute("SELECT id FROM suppliers").fetchall()]
+
+    # purchase orders + line items (mix of Draft / Ordered / Received)
+    po_status_weights = [("Draft", 5), ("Ordered", 10), ("Received", 18), ("Cancelled", 3)]
+    po_statuses = [s for s, w in po_status_weights for _ in range(w)]
+    po_n = 6000
+    pos, po_all_lines = [], []
+    for _ in range(28):
+        po_n += 1
+        sup = RNG.choice(sup_ids)
+        status = RNG.choice(po_statuses)
+        n_lines = RNG.randint(1, 4)
+        lines, total = [], 0
+        for _ in range(n_lines):
+            it = RNG.choice(item_rows)
+            qty = RNG.randint(20, 200)
+            rate = round(it["rate"] * db.COGS_RATIO * RNG.uniform(0.9, 1.05), 2)
+            amount = round(qty * rate, 2)
+            total += amount
+            lines.append((it["id"], qty, rate, amount))
+        pos.append((f"PO-{po_n}", sup, _d(-RNG.randint(2, 150)), status, round(total, 2)))
+        po_all_lines.append(lines)
+    with db.cursor() as conn:
+        conn.executemany(
+            "INSERT INTO purchase_orders(code,supplier_id,order_date,status,total) VALUES (?,?,?,?,?)", pos)
+        po_rows = conn.execute("SELECT id,code,status,order_date,total FROM purchase_orders ORDER BY id").fetchall()
+        for po, lines in zip(po_rows, po_all_lines):
+            for (item_id, qty, rate, amount) in lines:
+                conn.execute("INSERT INTO purchase_order_items(po_id,item_id,qty,rate,amount) VALUES (?,?,?,?,?)",
+                             (po["id"], item_id, qty, rate, amount))
+
+    # general ledger — derive a balanced set of entries from the seeded txns
+    gl = []  # (entry_date, account, debit, credit, ref)
+    for inv in invoices:
+        code, _oid, _cid, idate, _due, total, paid, _st = inv
+        gl.append((idate, "Accounts Receivable", total, 0, code))
+        gl.append((idate, "Sales Revenue", 0, total, code))
+        cogs = round(total * db.COGS_RATIO, 2)
+        gl.append((idate, "Cost of Goods Sold", cogs, 0, code))
+        gl.append((idate, "Inventory", 0, cogs, code))
+        if paid > 0:
+            gl.append((idate, "Cash", paid, 0, code))
+            gl.append((idate, "Accounts Receivable", 0, paid, code))
+    for po in po_rows:
+        if po["status"] == "Received":
+            gl.append((po["order_date"], "Inventory", po["total"], 0, po["code"]))
+            gl.append((po["order_date"], "Accounts Payable", 0, po["total"], po["code"]))
+    with db.cursor() as conn:
+        conn.executemany(
+            "INSERT INTO gl_entries(entry_date,account,debit,credit,ref) VALUES (?,?,?,?,?)", gl)
+
     print(f"FastERP seeded → {db.DB_PATH}")
     print(f"  {len(custs)} customers · {len(items)} items · {len(orders)} sales orders · "
           f"{len(invoices)} invoices · {len(moves)} stock moves")
+    print(f"  {len(sups)} suppliers · {len(pos)} purchase orders · {len(gl)} GL entries")
 
 
 if __name__ == "__main__":

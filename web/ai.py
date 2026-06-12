@@ -14,13 +14,21 @@ MODEL = os.getenv("MODEL_NAME", "grok-4-1-fast-reasoning")
 def snapshot() -> str:
     k = db.kpis()
     obs = db.orders_by_status()
+    tb = db.trial_balance()
+    payable = next((r["balance"] for r in tb if r["account"] == "Accounts Payable"), 0)
+    open_po = db.scalar("SELECT COUNT(*) FROM purchase_orders WHERE status='Ordered'") or 0
+    n_sup = db.scalar("SELECT COUNT(*) FROM suppliers") or 0
     lines = [
-        "ERP SNAPSHOT (synthetic order-to-cash + inventory):",
+        "ERP SNAPSHOT (synthetic order-to-cash + inventory + buying + GL):",
         f"- Revenue (paid invoices): {money(k['revenue'])}. Receivables outstanding: {money(k['receivable'])} "
         f"(of which {money(k['overdue'])} overdue).",
         f"- Inventory value: {money(k['inventory_value'])}; {k['low_stock']} items below reorder. "
         f"Open orders: {k['open_orders']}. Customers: {k['customers']}.",
+        f"- Buying: {n_sup} suppliers, {open_po} purchase orders awaiting receipt. "
+        f"Accounts Payable outstanding: {money(payable)}.",
         "Sales orders by status: " + ", ".join(f"{o['status']} {o['count']} ({money(o['value'])})" for o in obs),
+        "Trial balance (account: balance): " + ", ".join(
+            f"{r['account']} {money(r['balance'])} {r['normal']}" for r in tb),
     ]
     return "\n".join(lines)
 
@@ -45,7 +53,8 @@ def handle_command(text):
     cmd = parts[0].lower() if parts else ""
     if cmd in ("help", "?"):
         return ("**FastERP shortcuts**\n\n- `/sales` — orders by status\n- `/ar` — receivables aging\n"
-                "- `/stock` — low-stock items\n- `/top` — top customers by outstanding\n\nOr ask a question in plain English.")
+                "- `/stock` — low-stock items\n- `/top` — top customers by outstanding\n"
+                "- `/buying` — open purchase orders\n- `/gl` — trial balance\n\nOr ask a question in plain English.")
     if cmd == "sales":
         return "**Sales orders by status**\n\n" + _table(
             ["Status", "Orders", "Value"], [[o["status"], o["count"], money(o["value"])] for o in db.orders_by_status()])
@@ -67,6 +76,22 @@ def handle_command(text):
                        GROUP BY c.id ORDER BY due DESC LIMIT 10""")
         return "**Top customers by outstanding**\n\n" + _table(["Customer", "Outstanding"],
                                                               [[x["name"], money(x["due"])] for x in r])
+    if cmd in ("buying", "po", "purchase"):
+        r = db.rows("""SELECT po.code, s.name supplier, po.status, po.total FROM purchase_orders po
+                       LEFT JOIN suppliers s ON s.id=po.supplier_id
+                       WHERE po.status='Ordered' ORDER BY po.total DESC LIMIT 15""")
+        if not r:
+            return "No purchase orders awaiting receipt. 🎉"
+        return "**Purchase orders awaiting receipt**\n\n" + _table(
+            ["PO", "Supplier", "Total"], [[x["code"], x["supplier"], money(x["total"])] for x in r])
+    if cmd in ("gl", "ledger", "tb"):
+        tb = db.trial_balance()
+        t = db.gl_totals()
+        body = _table(["Account", "Debit", "Credit", "Balance"],
+                      [[r["account"], money(r["debit"]), money(r["credit"]), f"{money(r['balance'])} {r['normal']}"]
+                       for r in tb])
+        flag = "✅ balanced" if t["balanced"] else "⚠ out of balance"
+        return f"**Trial balance** ({flag})\n\n" + body
     return f"Unknown command `/{cmd}`. Try `/help`."
 
 

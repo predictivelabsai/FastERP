@@ -156,6 +156,74 @@ def get(session):
     return _guard(session, "customers", views.customers_list)
 
 
+# --- buying -----------------------------------------------------------------
+
+@rt("/suppliers")
+def get(session):
+    return _guard(session, "suppliers", views.suppliers_list)
+
+
+@rt("/suppliers/new")
+def post(session, name: str = "", territory: str = ""):
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    if name.strip():
+        db.create_supplier(name, territory)
+    # re-render the suppliers main block (form + table)
+    return views.suppliers_list()[1]
+
+
+@rt("/purchase")
+def get(session, status: str = "All"):
+    return _guard(session, "purchase", lambda: views.purchase_orders_list(status))
+
+
+@rt("/purchase/new")
+def get(session):
+    return _guard(session, "purchase", views.po_new_form)
+
+
+@rt("/purchase/new")
+async def post(session, request):
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    form = await request.form()
+    supplier_id = int(form.get("supplier_id") or 0)
+    lines = []
+    for n in range(5):
+        item = form.get(f"item_{n}")
+        if not item:
+            continue
+        qty = float(form.get(f"qty_{n}") or 0)
+        rate = float(form.get(f"rate_{n}") or 0)
+        if qty > 0:
+            lines.append((int(item), qty, rate))
+    pid = db.create_po(supplier_id, lines) if supplier_id and lines else None
+    if pid:
+        return RedirectResponse(f"/purchase/{pid}", status_code=303)
+    return RedirectResponse("/purchase/new", status_code=303)
+
+
+@rt("/purchase/{pid}")
+def get(session, pid: int):
+    return _guard(session, "purchase", lambda: views.po_detail(pid))
+
+
+@rt("/purchase/{pid}/receive")
+def post(session, pid: int):
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    db.receive_po(pid)
+    return views.po_main(pid)
+
+
+# --- finance / general ledger ----------------------------------------------
+
+@rt("/ledger")
+def get(session, account: str = "All"):
+    return _guard(session, "ledger", lambda: views.gl_view(account))
+
+
 @rt("/ai")
 def get(session):
     body = (views._title("AI Assistant", "Chat lives in the right rail. Ask in plain English or use slash-commands."),

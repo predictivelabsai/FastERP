@@ -55,6 +55,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;}
 .pill.closed,.pill.paid{background:var(--ok-light);color:#166534;} .pill.cancelled{background:#f1f5f9;color:#94a3b8;}
 .pill.unpaid{background:var(--surface-2);color:#5b5246;} .pill.partlypaid{background:#fef3c7;color:#92400e;} .pill.overdue{background:var(--danger-light);color:#991b1b;}
 .pill.low{background:var(--danger-light);color:#991b1b;} .pill.ok2{background:var(--ok-light);color:#166534;}
+.pill.ordered{background:var(--accent-light);color:var(--accent-hover);} .pill.received{background:var(--ok-light);color:#166534;}
 .funnel-row{display:grid;grid-template-columns:120px 1fr 110px;align-items:center;gap:10px;margin-bottom:7px;font-size:13px;}
 .funnel-bar{height:18px;border-radius:5px;background:var(--accent);min-width:2px;} .funnel-row .v{text-align:right;color:var(--text-dim);}
 .detail-grid{display:grid;grid-template-columns:1fr 300px;gap:16px;}
@@ -107,7 +108,10 @@ NAV_ITEMS = [
     ("SELLING", [("orders", "Sales Orders", "📦", "/orders"),
                  ("invoices", "Invoices (AR)", "🧾", "/invoices"),
                  ("customers", "Customers", "🏢", "/customers")]),
+    ("BUYING", [("suppliers", "Suppliers", "🏭", "/suppliers"),
+                ("purchase", "Purchase Orders", "🛒", "/purchase")]),
     ("STOCK", [("items", "Items & Stock", "📋", "/items")]),
+    ("FINANCE", [("ledger", "General Ledger", "📚", "/ledger")]),
     ("HELP", [("guide", "User Guide", "📖", "/guide")]),
 ]
 SAMPLE_QUESTIONS = ["What's outstanding from customers?", "Which items are low on stock?", "How are sales orders tracking?"]
