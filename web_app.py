@@ -24,11 +24,11 @@ from fasthtml.common import (
     fast_app, serve, Div, H1, P, A, Form, Input, Button, NotStr,
     RedirectResponse, Script, Style, Link, Title,
 )
-from starlette.responses import StreamingResponse, Response
+from starlette.responses import StreamingResponse, Response, FileResponse
 
 import db
 from web.layout import page, LAYOUT_CSS
-from web import views, ai
+from web import views, ai, accounting
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger("fasterp")
@@ -219,6 +219,90 @@ def post(session, pid: int):
 
 # --- finance / general ledger ----------------------------------------------
 
+@rt("/accounting")
+def get(session):
+    return _guard(session, "accounting", accounting.overview)
+
+
+@rt("/accounting/accounts")
+def get(session):
+    return _guard(session, "accounts", accounting.chart_of_accounts)
+
+
+@rt("/accounting/expenses")
+def get(session):
+    return _guard(session, "expenses", accounting.expenses)
+
+
+@rt("/accounting/expenses/new")
+def get(session):
+    return _guard(session, "expenses", accounting.expense_form)
+
+
+@rt("/accounting/expenses/new")
+async def post(session, request):
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    form = await request.form()
+    try:
+        db.create_expense(
+            int(form.get("supplier_id") or 0), str(form.get("category") or ""),
+            str(form.get("description") or ""), float(form.get("net_amount") or 0),
+            int(form.get("tax_code_id") or 0), str(form.get("currency") or "GBP"),
+            int(form.get("business_unit_id") or 0), int(form.get("project_id") or 0),
+            str(form.get("note") or ""))
+    except (TypeError, ValueError):
+        return _guard(session, "expenses", accounting.expense_form)
+    return RedirectResponse("/accounting/expenses", status_code=303)
+
+
+@rt("/accounting/journals")
+def get(session):
+    return _guard(session, "journals", accounting.journals)
+
+
+@rt("/accounting/journals/new")
+def get(session):
+    return _guard(session, "journals", accounting.journal_form)
+
+
+@rt("/accounting/journals/new")
+async def post(session, request):
+    if not _user(session):
+        return Response("Unauthorized", status_code=401)
+    form = await request.form()
+    lines = [(form.get(f"account_{n}"), form.get(f"debit_{n}") or 0,
+              form.get(f"credit_{n}") or 0, form.get(f"unit_{n}"),
+              form.get(f"project_{n}")) for n in range(4)]
+    jid = db.create_journal(str(form.get("entry_date") or ""), str(form.get("memo") or ""), lines)
+    if not jid:
+        return _guard(session, "journals",
+                      lambda: accounting.journal_form("Journal is not balanced. Debits must equal credits."))
+    return RedirectResponse("/accounting/journals", status_code=303)
+
+
+@rt("/accounting/projects")
+def get(session):
+    return _guard(session, "projects", accounting.projects)
+
+
+@rt("/accounting/reports")
+def get(session, report: str = "pnl"):
+    return _guard(session, "reports", lambda: accounting.reports(report))
+
+
+@rt("/accounting/setup")
+def get(session):
+    return _guard(session, "accounting_setup", accounting.settings)
+
+
+@rt("/docs/assets/receipts/{filename}")
+def get(session, filename: str):
+    if not _user(session) or "/" in filename or ".." in filename:
+        return Response("Not found", status_code=404)
+    path = os.path.join(os.path.dirname(__file__), "docs", "assets", "receipts", filename)
+    return FileResponse(path) if os.path.isfile(path) else Response("Not found", status_code=404)
+
 @rt("/ledger")
 def get(session, account: str = "All"):
     return _guard(session, "ledger", lambda: views.gl_view(account))
@@ -287,7 +371,9 @@ async def post(session, message: str = "", thread_id: str = ""):
 
 
 def _ensure_db():
-    if not db.db_exists():
+    existed = db.db_exists()
+    db.init_schema()
+    if not existed:
         logger.info("No database found — seeding synthetic ERP data…")
         import seed
         seed.build()

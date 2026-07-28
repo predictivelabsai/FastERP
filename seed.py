@@ -31,7 +31,10 @@ def _d(days):
 def build():
     db.init_schema()
     with db.cursor() as conn:
-        for t in ("chat_messages", "gl_entries", "purchase_order_items", "purchase_orders",
+        for t in ("chat_messages", "custom_fields", "attachments", "transaction_links",
+                  "journal_lines", "journal_entries", "expenses", "projects",
+                  "business_units", "tax_codes", "currencies", "accounts",
+                  "gl_entries", "purchase_order_items", "purchase_orders",
                   "suppliers", "stock_moves", "invoices", "sales_order_items", "sales_orders",
                   "items", "customers"):
             conn.execute(f"DELETE FROM {t}")
@@ -189,10 +192,93 @@ def build():
         conn.executemany(
             "INSERT INTO gl_entries(entry_date,account,debit,credit,ref) VALUES (?,?,?,?,?)", gl)
 
+    # accounting workspace: chart, dimensions, foreign exchange, tax and projects
+    account_types = {
+        "Bank": ("1000", "Asset"), "Cash": ("1010", "Asset"),
+        "Accounts Receivable": ("1100", "Asset"), "Inventory": ("1200", "Asset"),
+        "Prepaid Expenses": ("1300", "Asset"), "Equipment": ("1500", "Asset"),
+        "Accounts Payable": ("2000", "Liability"), "Sales Tax Payable": ("2100", "Liability"),
+        "Accrued Expenses": ("2200", "Liability"), "Owner's Equity": ("3000", "Equity"),
+        "Retained Earnings": ("3100", "Equity"), "Sales Revenue": ("4000", "Income"),
+        "Service Revenue": ("4100", "Income"), "Other Income": ("4900", "Income"),
+        "Cost of Goods Sold": ("5000", "Cost of Sales"), "Payroll Expense": ("6100", "Expense"),
+        "Rent Expense": ("6200", "Expense"), "Software Expense": ("6300", "Expense"),
+        "Travel Expense": ("6400", "Expense"), "Marketing Expense": ("6500", "Expense"),
+        "Professional Fees": ("6600", "Expense"), "Utilities Expense": ("6700", "Expense"),
+    }
+    with db.cursor() as conn:
+        conn.executemany(
+            "INSERT INTO accounts(code,name,account_type,normal_side) VALUES (?,?,?,?)",
+            [(code, name, kind, "Debit" if db.ACCOUNTS[name] > 0 else "Credit")
+             for name, (code, kind) in account_types.items()])
+        conn.executemany(
+            "INSERT INTO currencies(code,name,symbol,rate_to_gbp,updated) VALUES (?,?,?,?,?)",
+            [("GBP", "Pound sterling", "£", 1.0, TODAY.isoformat()),
+             ("EUR", "Euro", "€", 0.86, TODAY.isoformat()),
+             ("USD", "US dollar", "$", 0.78, TODAY.isoformat()),
+             ("CAD", "Canadian dollar", "C$", 0.57, TODAY.isoformat())])
+        conn.executemany(
+            "INSERT INTO business_units(code,name,region) VALUES (?,?,?)",
+            [("UK", "UK Operations", "United Kingdom"), ("EU", "Continental Europe", "EU"),
+             ("NA", "North America", "North America")])
+        conn.executemany(
+            "INSERT INTO tax_codes(code,name,rate,recoverable) VALUES (?,?,?,?)",
+            [("ZERO", "Zero rated", 0, 0), ("UK20", "UK VAT 20%", 20, 1),
+             ("RED5", "Reduced VAT 5%", 5, 1), ("EXEMPT", "Tax exempt", 0, 0)])
+        unit_ids = [r[0] for r in conn.execute("SELECT id FROM business_units ORDER BY id")]
+        conn.executemany(
+            """INSERT INTO projects(code,name,customer_id,business_unit_id,status,budget,start_date,end_date)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            [("PRJ-101", "Nordic Retail Rollout", cust_ids[0], unit_ids[1], "Active", 180000, _d(-90), _d(80)),
+             ("PRJ-102", "Warehouse Automation", cust_ids[4], unit_ids[0], "Active", 95000, _d(-45), _d(120)),
+             ("PRJ-103", "North America Launch", cust_ids[8], unit_ids[2], "Planning", 240000, _d(20), _d(240)),
+             ("PRJ-104", "Lighting Retrofit", cust_ids[11], unit_ids[0], "Completed", 72000, _d(-180), _d(-20))])
+        project_ids = [r[0] for r in conn.execute("SELECT id FROM projects ORDER BY id")]
+
+    categories = ["Software Expense", "Travel Expense", "Marketing Expense",
+                  "Professional Fees", "Utilities Expense", "Rent Expense"]
+    currencies = ["GBP", "GBP", "GBP", "EUR", "USD"]
+    expense_ids = []
+    for n in range(22):
+        expense_ids.append(db.create_expense(
+            RNG.choice(sup_ids), RNG.choice(categories),
+            RNG.choice(["Cloud subscription", "Team travel", "Campaign services",
+                        "Legal advisory", "Office services", "Project materials"]),
+            round(RNG.uniform(90, 4200), 2), RNG.choice([1, 2, 2, 3]),
+            RNG.choice(currencies), RNG.choice(unit_ids),
+            RNG.choice(project_ids + [None, None]), "Synthetic expense for demonstration"))
+
+    # Opening capital and two manual, dimensioned journals.
+    db.create_journal(_d(-200), "Opening bank capital",
+                      [("Bank", 250000, 0, unit_ids[0], None),
+                       ("Owner's Equity", 0, 250000, unit_ids[0], None)])
+    db.create_journal(_d(-35), "Accrue project consulting",
+                      [("Professional Fees", 6800, 0, unit_ids[1], project_ids[0]),
+                       ("Accrued Expenses", 0, 6800, unit_ids[1], project_ids[0])])
+    with db.cursor() as conn:
+        conn.executemany(
+            "INSERT INTO transaction_links(source_ref,target_ref,link_type) VALUES (?,?,?)",
+            [(invoices[0][0], orders[0][0], "generated from"),
+             (invoices[1][0], invoices[0][0], "related transaction"),
+             ("EXP-8001", "PRJ-101", "allocated to")])
+        conn.executemany(
+            """INSERT INTO attachments(entity_type,entity_id,filename,path,note,created)
+               VALUES (?,?,?,?,?,?)""",
+            [("expense", expense_ids[0], "cloud-receipt.svg",
+              "docs/assets/receipts/cloud-receipt.svg", "Synthetic supplier receipt", _d(-8)),
+             ("expense", expense_ids[1], "travel-receipt.svg",
+              "docs/assets/receipts/travel-receipt.svg", "Synthetic travel receipt", _d(-15))])
+        conn.executemany(
+            """INSERT INTO custom_fields(entity_type,entity_id,field_name,field_value)
+               VALUES (?,?,?,?)""",
+            [("project", project_ids[0], "Engagement lead", "Morgan Lee"),
+             ("expense", expense_ids[0], "Approval tier", "Department head")])
+
     print(f"FastERP seeded → {db.DB_PATH}")
     print(f"  {len(custs)} customers · {len(items)} items · {len(orders)} sales orders · "
           f"{len(invoices)} invoices · {len(moves)} stock moves")
     print(f"  {len(sups)} suppliers · {len(pos)} purchase orders · {len(gl)} GL entries")
+    print(f"  {len(account_types)} accounts · {len(expense_ids)} expenses · 4 projects · 4 currencies")
 
 
 if __name__ == "__main__":

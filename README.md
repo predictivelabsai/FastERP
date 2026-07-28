@@ -1,10 +1,11 @@
 # FastERP
 
 **FastERP** is an open-source **ERP** built with [FastHTML](https://fastht.ml) —
-a server-side, HTMX-driven port of [ERPNext](https://github.com/frappe/erpnext),
-scoped to the **Order-to-Cash + Inventory** vertical (ERPNext is ~527 doctypes;
-FastERP models the slice an ops/finance team lives in). Python-first, no
-JavaScript framework, with an AI assistant grounded in the live (synthetic) data.
+a server-side, HTMX-driven port of [ERPNext](https://github.com/frappe/erpnext)
+with an Intuit-inspired, self-contained accounting workspace. It covers
+**Order-to-Cash, Procure-to-Stock, Inventory and Accounting** with deterministic
+synthetic data. Python-first, no JavaScript framework, with an AI assistant
+grounded in the live demo company.
 
 *Sell, ship, invoice, get paid.* Runs on port **5011**.
 
@@ -14,6 +15,10 @@ JavaScript framework, with an AI assistant grounded in the live (synthetic) data
 ## Demo
 
 ![FastERP walkthrough](docs/demo/fasterp-walkthrough.gif)
+
+**[Download the FastERP product deck (PDF)](docs/FastERP_user_guide_2026-07-28.pdf)**
+· [PowerPoint](docs/FastERP_user_guide_2026-07-28.pptx)
+· [Web-friendly guide](docs/FastERP_user_guide_2026-07-28.md)
 
 ## Quickstart (native)
 
@@ -26,6 +31,12 @@ cp .env.sample .env          # add an LLM key for free-form AI chat
 
 Login: `admin@fasterp.example` / `FastERP2026$`. Rebuild data with
 `.venv/bin/python seed.py`.
+
+Run the optional integration API and open Swagger:
+
+```bash
+.venv/bin/uvicorn api_app:app --port 5012  # http://localhost:5012/docs
+```
 
 ## Run with Docker
 
@@ -48,8 +59,38 @@ docker compose up --build      # http://localhost:5011
 - **Items & Stock** (`/items`) — inventory by group with stock levels, value, and
   a **reorder flag**.
 - **Customers** (`/customers`) — accounts ranked by outstanding balance.
+- **Buying** (`/suppliers`, `/purchase`) — suppliers, multi-line purchase orders,
+  goods receipt, stock increases and Accounts Payable postings.
+- **Accounting** (`/accounting`) — finance KPIs, a 22-account chart, categorized
+  expenses, balanced manual journals and a filterable general ledger.
+- **Dimensions** — GBP/EUR/USD/CAD, tax codes, business units, projects, notes,
+  custom fields, transaction links and synthetic receipt attachments.
+- **Reports** (`/accounting/reports`) — Profit & Loss, Balance Sheet, Trial
+  Balance and sales-tax summaries; project pages show budget, costs and margin.
+- **Integration API** (`api_app.py`) — read-mostly FastAPI stubs for accounts,
+  invoices, expenses, projects, reports and webhook payloads. Swagger includes
+  example schemas; invoice POSTs validate previews without posting.
 - **AI Assistant** (right rail) — ops/finance Q&A grounded in a live snapshot;
-  slash-commands `/sales`, `/ar`, `/stock`, `/top` work with **no API key**.
+  slash-commands `/sales`, `/ar`, `/stock`, `/top`, `/buying` and `/gl` work
+  with **no API key**.
+
+## Accounting model
+
+Operational events post balanced entries automatically: invoicing books revenue
+and cost of sales, payments clear receivables, goods receipt creates inventory
+and payables, and expenses retain tax, currency, business-unit and project
+dimensions. This is illustrative accounting software using synthetic data—not a
+QuickBooks/Intuit integration or a production bookkeeping system.
+
+```bash
+.venv/bin/python -m pytest -q         # accounting and API invariants
+bash scripts/build_demo_gif.sh        # rebuild README walkthrough
+bash scripts/build_user_guide.sh      # regenerate PDF and PowerPoint guides
+```
+
+See the [dated user guide](docs/FastERP_user_guide_2026-07-28.md), also provided
+as [PDF](docs/FastERP_user_guide_2026-07-28.pdf) and
+[PowerPoint](docs/FastERP_user_guide_2026-07-28.pptx).
 
 ## Scope
 
@@ -61,12 +102,15 @@ what's deferred is in **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 ## Architecture
 
 ```
-web_app.py        routes, auth, SSE chat, boot
+web_app.py        FastHTML routes, auth, SSE chat, boot
+api_app.py        FastAPI integration stubs + OpenAPI/Swagger
 db.py             SQLite schema (selling + stock) + KPI helpers
 seed.py           deterministic synthetic customers, items, orders, invoices, stock
 web/layout.py     3-pane shell, CSS, chat JS
 web/views.py      dashboard, orders, invoices, items, customers renderers
+web/accounting.py accounting workspace, forms, dimensions and reports
 web/ai.py         grounded chat + slash-commands
+tests/            accounting invariants and API contract smoke tests
 ```
 
 See **[SKILLS.md](SKILLS.md)** for the capability reference + migration playbook.

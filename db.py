@@ -152,6 +152,99 @@ CREATE TABLE IF NOT EXISTS gl_entries (
     credit        REAL NOT NULL DEFAULT 0,
     ref           TEXT              -- e.g. INV-7001, PO-6001
 );
+CREATE TABLE IF NOT EXISTS accounts (
+    code          TEXT PRIMARY KEY,
+    name          TEXT NOT NULL UNIQUE,
+    account_type  TEXT NOT NULL,
+    normal_side   TEXT NOT NULL,
+    active        INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS currencies (
+    code          TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    symbol        TEXT NOT NULL,
+    rate_to_gbp   REAL NOT NULL,
+    updated       TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS business_units (
+    id            INTEGER PRIMARY KEY,
+    code          TEXT NOT NULL UNIQUE,
+    name          TEXT NOT NULL,
+    region        TEXT
+);
+CREATE TABLE IF NOT EXISTS projects (
+    id            INTEGER PRIMARY KEY,
+    code          TEXT NOT NULL UNIQUE,
+    name          TEXT NOT NULL,
+    customer_id   INTEGER REFERENCES customers(id),
+    business_unit_id INTEGER REFERENCES business_units(id),
+    status        TEXT NOT NULL,
+    budget        REAL NOT NULL DEFAULT 0,
+    start_date    TEXT,
+    end_date      TEXT
+);
+CREATE TABLE IF NOT EXISTS tax_codes (
+    id            INTEGER PRIMARY KEY,
+    code          TEXT NOT NULL UNIQUE,
+    name          TEXT NOT NULL,
+    rate          REAL NOT NULL,
+    recoverable   INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS expenses (
+    id            INTEGER PRIMARY KEY,
+    code          TEXT NOT NULL UNIQUE,
+    expense_date  TEXT NOT NULL,
+    supplier_id   INTEGER REFERENCES suppliers(id),
+    category      TEXT NOT NULL,
+    description   TEXT,
+    net_amount    REAL NOT NULL,
+    tax_amount    REAL NOT NULL DEFAULT 0,
+    total         REAL NOT NULL,
+    currency      TEXT NOT NULL DEFAULT 'GBP',
+    exchange_rate REAL NOT NULL DEFAULT 1,
+    business_unit_id INTEGER REFERENCES business_units(id),
+    project_id    INTEGER REFERENCES projects(id),
+    status        TEXT NOT NULL DEFAULT 'Posted',
+    note          TEXT
+);
+CREATE TABLE IF NOT EXISTS journal_entries (
+    id            INTEGER PRIMARY KEY,
+    code          TEXT NOT NULL UNIQUE,
+    entry_date    TEXT NOT NULL,
+    memo          TEXT,
+    status        TEXT NOT NULL DEFAULT 'Posted'
+);
+CREATE TABLE IF NOT EXISTS journal_lines (
+    id            INTEGER PRIMARY KEY,
+    journal_id    INTEGER NOT NULL REFERENCES journal_entries(id),
+    account       TEXT NOT NULL,
+    debit         REAL NOT NULL DEFAULT 0,
+    credit        REAL NOT NULL DEFAULT 0,
+    business_unit_id INTEGER REFERENCES business_units(id),
+    project_id    INTEGER REFERENCES projects(id)
+);
+CREATE TABLE IF NOT EXISTS transaction_links (
+    id            INTEGER PRIMARY KEY,
+    source_ref    TEXT NOT NULL,
+    target_ref    TEXT NOT NULL,
+    link_type     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS attachments (
+    id            INTEGER PRIMARY KEY,
+    entity_type   TEXT NOT NULL,
+    entity_id     INTEGER NOT NULL,
+    filename      TEXT NOT NULL,
+    path          TEXT NOT NULL,
+    note          TEXT,
+    created       TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS custom_fields (
+    id            INTEGER PRIMARY KEY,
+    entity_type   TEXT NOT NULL,
+    entity_id     INTEGER NOT NULL,
+    field_name    TEXT NOT NULL,
+    field_value   TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_so_status ON sales_orders(status);
 CREATE INDEX IF NOT EXISTS idx_inv_status ON invoices(status);
 CREATE INDEX IF NOT EXISTS idx_soi_order ON sales_order_items(order_id);
@@ -161,14 +254,33 @@ CREATE INDEX IF NOT EXISTS idx_gl_account ON gl_entries(account);
 
 # Chart of accounts (sign: +1 debit-normal, -1 credit-normal)
 ACCOUNTS = {
-    "Accounts Receivable": 1, "Cash": 1, "Inventory": 1,
-    "Sales Revenue": -1, "Accounts Payable": -1, "Cost of Goods Sold": 1,
+    "Bank": 1, "Cash": 1, "Accounts Receivable": 1, "Inventory": 1,
+    "Prepaid Expenses": 1, "Equipment": 1, "Accounts Payable": -1,
+    "Sales Tax Payable": -1, "Accrued Expenses": -1, "Owner's Equity": -1,
+    "Retained Earnings": -1, "Sales Revenue": -1, "Service Revenue": -1,
+    "Other Income": -1, "Cost of Goods Sold": 1, "Payroll Expense": 1,
+    "Rent Expense": 1, "Software Expense": 1, "Travel Expense": 1,
+    "Marketing Expense": 1, "Professional Fees": 1, "Utilities Expense": 1,
+}
+OPERATING_EXPENSES = {
+    "Payroll Expense", "Rent Expense", "Software Expense", "Travel Expense",
+    "Marketing Expense", "Professional Fees", "Utilities Expense",
 }
 
 
 def init_schema():
     with cursor() as conn:
         conn.executescript(SCHEMA)
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(gl_entries)")}
+        for name, ddl in (
+            ("business_unit_id", "INTEGER REFERENCES business_units(id)"),
+            ("project_id", "INTEGER REFERENCES projects(id)"),
+            ("currency", "TEXT NOT NULL DEFAULT 'GBP'"),
+            ("exchange_rate", "REAL NOT NULL DEFAULT 1"),
+            ("memo", "TEXT"),
+        ):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE gl_entries ADD COLUMN {name} {ddl}")
 
 
 def kpis() -> dict:
@@ -404,3 +516,159 @@ def receive_po(pid) -> bool:
     # GL posting outside the write txn (avoids self-deadlock)
     post_gl([("Inventory", po["total"], 0), ("Accounts Payable", 0, po["total"])], ref=po["code"])
     return True
+
+
+# --- accounting workspace --------------------------------------------------
+
+def accounting_kpis():
+    balances = {r["account"]: r["balance"] for r in trial_balance()}
+    revenue = sum(balances.get(a, 0) for a in ("Sales Revenue", "Service Revenue", "Other Income"))
+    expenses = sum(balances.get(a, 0) for a in OPERATING_EXPENSES)
+    return {
+        "cash": balances.get("Cash", 0) + balances.get("Bank", 0),
+        "receivable": balances.get("Accounts Receivable", 0),
+        "payable": balances.get("Accounts Payable", 0),
+        "revenue": revenue,
+        "expenses": expenses,
+        "net_income": revenue - expenses - balances.get("Cost of Goods Sold", 0),
+        "tax_payable": balances.get("Sales Tax Payable", 0),
+    }
+
+
+def account_rows():
+    return rows("""SELECT a.*, COALESCE(SUM(g.debit),0) debit,
+                          COALESCE(SUM(g.credit),0) credit
+                   FROM accounts a LEFT JOIN gl_entries g ON g.account=a.name
+                   GROUP BY a.code ORDER BY a.code""")
+
+
+def expense_rows(limit=200):
+    return rows("""SELECT e.*, s.name supplier, b.name business_unit, p.name project
+                   FROM expenses e
+                   LEFT JOIN suppliers s ON s.id=e.supplier_id
+                   LEFT JOIN business_units b ON b.id=e.business_unit_id
+                   LEFT JOIN projects p ON p.id=e.project_id
+                   ORDER BY e.expense_date DESC, e.id DESC LIMIT ?""", (limit,))
+
+
+def create_expense(supplier_id, category, description, net_amount, tax_code_id,
+                   currency="GBP", business_unit_id=None, project_id=None, note=""):
+    net = round(float(net_amount), 2)
+    tax = one("SELECT * FROM tax_codes WHERE id=?", (tax_code_id,)) if tax_code_id else None
+    tax_amount = round(net * (tax["rate"] if tax else 0) / 100, 2)
+    fx = one("SELECT rate_to_gbp FROM currencies WHERE code=?", (currency,)) or {"rate_to_gbp": 1}
+    total = net + tax_amount
+    with cursor() as conn:
+        n = (conn.execute("SELECT COALESCE(MAX(id),0) FROM expenses").fetchone()[0]) + 8001
+        code = f"EXP-{n}"
+        conn.execute(
+            """INSERT INTO expenses(code,expense_date,supplier_id,category,description,
+               net_amount,tax_amount,total,currency,exchange_rate,business_unit_id,
+               project_id,note) VALUES (?,date('now'),?,?,?,?,?,?,?,?,?,?,?)""",
+            (code, supplier_id or None, category, description, net, tax_amount, total,
+             currency, fx["rate_to_gbp"], business_unit_id or None, project_id or None, note))
+        expense_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    base_net, base_tax = round(net * fx["rate_to_gbp"], 2), round(tax_amount * fx["rate_to_gbp"], 2)
+    lines = [(category, base_net, 0), ("Accounts Payable", 0, base_net + base_tax)]
+    if base_tax:
+        lines.append(("Sales Tax Payable", base_tax, 0))
+    with cursor() as conn:
+        for account, debit, credit in lines:
+            conn.execute(
+                """INSERT INTO gl_entries
+                   (entry_date,account,debit,credit,ref,business_unit_id,project_id,
+                    currency,exchange_rate,memo)
+                   VALUES (date('now'),?,?,?,?,?,?,?,?,?)""",
+                (account, debit, credit, code, business_unit_id or None, project_id or None,
+                 currency, fx["rate_to_gbp"], description))
+    return expense_id
+
+
+def create_journal(entry_date, memo, lines):
+    """Create a balanced manual journal from (account, debit, credit, unit, project)."""
+    clean = [(a, round(float(d or 0), 2), round(float(c or 0), 2), u or None, p or None)
+             for a, d, c, u, p in lines if a and (float(d or 0) or float(c or 0))]
+    if len(clean) < 2 or abs(sum(x[1] for x in clean) - sum(x[2] for x in clean)) >= 0.01:
+        return None
+    with cursor() as conn:
+        n = (conn.execute("SELECT COALESCE(MAX(id),0) FROM journal_entries").fetchone()[0]) + 9001
+        code = f"JE-{n}"
+        conn.execute("INSERT INTO journal_entries(code,entry_date,memo) VALUES (?,?,?)",
+                     (code, entry_date or TODAY.isoformat(), memo))
+        jid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        for account, debit, credit, unit, project in clean:
+            conn.execute("""INSERT INTO journal_lines
+                            (journal_id,account,debit,credit,business_unit_id,project_id)
+                            VALUES (?,?,?,?,?,?)""", (jid, account, debit, credit, unit, project))
+            conn.execute("""INSERT INTO gl_entries
+                            (entry_date,account,debit,credit,ref,business_unit_id,project_id,memo)
+                            VALUES (?,?,?,?,?,?,?,?)""",
+                         (entry_date or TODAY.isoformat(), account, debit, credit, code,
+                          unit, project, memo))
+    return jid
+
+
+def journal_rows(limit=100):
+    return rows("""SELECT j.*, COUNT(l.id) lines, SUM(l.debit) total
+                   FROM journal_entries j LEFT JOIN journal_lines l ON l.journal_id=j.id
+                   GROUP BY j.id ORDER BY j.entry_date DESC, j.id DESC LIMIT ?""", (limit,))
+
+
+def project_rows():
+    return rows("""SELECT p.*, c.name customer, b.name business_unit,
+                     COALESCE(SUM(CASE WHEN g.account IN
+                       ('Sales Revenue','Service Revenue','Other Income') THEN g.credit-g.debit ELSE 0 END),0) revenue,
+                     COALESCE(SUM(CASE WHEN g.account LIKE '%Expense'
+                       OR g.account IN ('Professional Fees','Cost of Goods Sold')
+                       THEN g.debit-g.credit ELSE 0 END),0) costs
+                   FROM projects p
+                   LEFT JOIN customers c ON c.id=p.customer_id
+                   LEFT JOIN business_units b ON b.id=p.business_unit_id
+                   LEFT JOIN gl_entries g ON g.project_id=p.id
+                   GROUP BY p.id ORDER BY p.status, p.name""")
+
+
+def profit_and_loss(unit_id=None, project_id=None):
+    where, params = [], []
+    if unit_id:
+        where.append("business_unit_id=?")
+        params.append(unit_id)
+    if project_id:
+        where.append("project_id=?")
+        params.append(project_id)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    data = rows("""SELECT account, SUM(debit) debit, SUM(credit) credit
+                   FROM gl_entries""" + clause + " GROUP BY account", tuple(params))
+    result = []
+    for r in data:
+        if r["account"] in ("Sales Revenue", "Service Revenue", "Other Income"):
+            result.append({"section": "Income", "account": r["account"],
+                           "amount": r["credit"] - r["debit"]})
+        elif r["account"] == "Cost of Goods Sold" or r["account"] in OPERATING_EXPENSES:
+            result.append({"section": "Expenses", "account": r["account"],
+                           "amount": r["debit"] - r["credit"]})
+    return sorted(result, key=lambda x: (x["section"], x["account"]))
+
+
+def balance_sheet():
+    tb = trial_balance()
+    assets = {"Bank", "Cash", "Accounts Receivable", "Inventory", "Prepaid Expenses", "Equipment"}
+    liabilities = {"Accounts Payable", "Sales Tax Payable", "Accrued Expenses"}
+    equity = {"Owner's Equity", "Retained Earnings"}
+    result = {
+        "Assets": [r for r in tb if r["account"] in assets],
+        "Liabilities": [r for r in tb if r["account"] in liabilities],
+        "Equity": [r for r in tb if r["account"] in equity],
+    }
+    pnl = profit_and_loss()
+    earnings = (sum(r["amount"] for r in pnl if r["section"] == "Income")
+                - sum(r["amount"] for r in pnl if r["section"] == "Expenses"))
+    result["Equity"].append({"account": "Current Earnings", "balance": earnings,
+                             "debit": 0, "credit": earnings, "normal": "Cr"})
+    return result
+
+
+def tax_summary():
+    return rows("""SELECT substr(expense_date,1,7) period, SUM(net_amount) taxable,
+                          SUM(tax_amount) input_tax
+                   FROM expenses GROUP BY period ORDER BY period DESC""")

@@ -1,0 +1,24 @@
+@page {
+  size: A4 landscape;
+  margin: 1.1cm 1.5cm 1.3cm;
+  @bottom-left { content: "FastERP · Synthetic accounting workspace"; font-size: 8pt; color: #9a8f7f; }
+  @bottom-right { content: "2026-07-28 · contributor demo"; font-size: 8pt; color: #9a8f7f; }
+}
+html { font-size: 11.5pt; }
+body { font-family: "DejaVu Sans", Arial, sans-serif; color: #27211a; line-height: 1.45; margin: 0; }
+hr { page-break-after: always; border: 0; height: 0; margin: 0; visibility: hidden; }
+.cover { text-align: center; padding-top: 4cm; }
+.cover h1 { color: #d97706; font-size: 42pt; margin: 0 0 .4cm; }
+.cover h4 { color: #5b5246; font-size: 18pt; margin: .2cm; }
+h2 { color: white; background: #d97706; border-left: 7px solid #16a34a;
+  border-radius: 7px; font-size: 17pt; padding: .28cm .5cm; margin: 0 0 .55cm; }
+h3 { color: #b45309; }
+strong, a { color: #b45309; }
+code { color: #92400e; background: #fdeccb; padding: .04cm .12cm; border-radius: 3px; }
+img { display: block; float: right; max-width: 15.2cm; max-height: 13cm;
+  margin: 0 0 .3cm .7cm; border: 1px solid #ece2d4; border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-size: 9pt; }
+th { background: #d97706; color: white; text-align: left; padding: 5px; }
+td { border: 1px solid #ece2d4; padding: 5px; }
+tr:nth-child(even) td { background: #faf7f2; }
+h2, p, ul, ol, img { page-break-inside: avoid; }

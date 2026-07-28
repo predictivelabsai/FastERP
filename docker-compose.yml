@@ -16,5 +16,16 @@ services:
       FASTERP_SECRET: ${FASTERP_SECRET:-}
     volumes:
       - fasterp-data:/data
+  fasterp-api:
+    build: .
+    command: uvicorn api_app:app --host 0.0.0.0 --port 5012
+    ports:
+      - "5012:5012"
+    environment:
+      FASTERP_DB: /data/fasterp.sqlite
+    volumes:
+      - fasterp-data:/data
+    depends_on:
+      - fasterp
 volumes:
   fasterp-data:

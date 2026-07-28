@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="440" viewBox="0 0 720 440">
+  <rect width="720" height="440" fill="#f8fafc"/>
+  <rect x="90" y="45" width="540" height="350" rx="12" fill="white" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="130" y="105" font-family="Arial" font-size="28" font-weight="bold" fill="#0f172a">Nimbus Cloud Services</text>
+  <text x="130" y="140" font-family="Arial" font-size="16" fill="#64748b">SYNTHETIC RECEIPT · RCPT-24018</text>
+  <line x1="130" y1="170" x2="590" y2="170" stroke="#e2e8f0"/>
+  <text x="130" y="215" font-family="Arial" font-size="19" fill="#334155">Business platform subscription</text>
+  <text x="530" y="215" font-family="Arial" font-size="19" text-anchor="end" fill="#334155">£780.00</text>
+  <text x="130" y="258" font-family="Arial" font-size="17" fill="#64748b">VAT (20%)</text>
+  <text x="530" y="258" font-family="Arial" font-size="17" text-anchor="end" fill="#64748b">£156.00</text>
+  <line x1="360" y1="285" x2="590" y2="285" stroke="#94a3b8"/>
+  <text x="130" y="330" font-family="Arial" font-size="23" font-weight="bold" fill="#0f172a">Total paid</text>
+  <text x="530" y="330" font-family="Arial" font-size="23" font-weight="bold" text-anchor="end" fill="#0f172a">£936.00</text>
+  <text x="130" y="372" font-family="Arial" font-size="14" fill="#94a3b8">Demo artifact — no real company or transaction.</text>
+</svg>

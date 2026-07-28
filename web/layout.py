@@ -75,6 +75,18 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;}
 .bar{height:8px;background:var(--surface-2);border-radius:4px;overflow:hidden;} .bar > span{display:block;height:100%;background:var(--accent);}
 .btn{padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;font-size:13px;}
 .btn:hover{background:var(--surface-2);} .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);} .btn.primary:hover{background:var(--accent-hover);} .btn.sm{padding:3px 9px;font-size:12px;}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px;}
+.accounting-form input,.accounting-form select{width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--text);}
+.accounting-form .label{font-size:12px;font-weight:600;color:var(--text-dim);margin:0 0 5px;}
+.form-actions{display:flex;gap:8px;margin-top:18px;}
+.journal-line{display:grid;grid-template-columns:2fr 1fr 1fr 1.3fr 1.3fr;gap:8px;align-items:center;margin-bottom:8px;}
+.journal-head{font-size:11px;color:var(--text-mute);text-transform:uppercase;letter-spacing:.5px;}
+.summary-row,.setup-row{display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);}
+.summary-row.total{font-size:16px;border-top:2px solid var(--border);border-bottom:0;}
+.setup-row{grid-template-columns:minmax(55px,.5fr) 1.5fr 1fr;font-size:13px;}
+.project-row{padding:8px 0;border-bottom:1px solid var(--border);}
+.project-row>div{display:flex;align-items:center;justify-content:space-between;}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
 .login-wrap{height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#f6ead4 0%,#fdeccb 100%);}
 .login-card{background:#fff;padding:36px 40px;border-radius:14px;width:360px;box-shadow:0 20px 40px rgba(15,23,42,.08);}
 .login-card h1{margin:0 0 4px;font-size:22px;} .login-card p{margin:0 0 20px;color:var(--text-mute);font-size:13px;}
@@ -111,7 +123,14 @@ NAV_ITEMS = [
     ("BUYING", [("suppliers", "Suppliers", "🏭", "/suppliers"),
                 ("purchase", "Purchase Orders", "🛒", "/purchase")]),
     ("STOCK", [("items", "Items & Stock", "📋", "/items")]),
-    ("FINANCE", [("ledger", "General Ledger", "📚", "/ledger")]),
+    ("ACCOUNTING", [("accounting", "Overview", "🧮", "/accounting"),
+                    ("accounts", "Chart of Accounts", "🗂️", "/accounting/accounts"),
+                    ("expenses", "Expenses", "💳", "/accounting/expenses"),
+                    ("journals", "Journal Entries", "📝", "/accounting/journals"),
+                    ("ledger", "General Ledger", "📚", "/ledger"),
+                    ("projects", "Projects", "🎯", "/accounting/projects"),
+                    ("reports", "Reports", "📈", "/accounting/reports"),
+                    ("accounting_setup", "Setup", "⚙️", "/accounting/setup")]),
     ("HELP", [("guide", "User Guide", "📖", "/guide")]),
 ]
 SAMPLE_QUESTIONS = ["What's outstanding from customers?", "Which items are low on stock?", "How are sales orders tracking?"]
