@@ -65,19 +65,29 @@ def build(source, output):
     prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
     blank = prs.slide_layouts[6]
     base = os.path.dirname(os.path.abspath(source))
+    estonian = source.endswith("_ee.md")
+    footer_text = ("FastERP · Sünteetiline raamatupidamise tööruum · 2026-07-28"
+                   if estonian else
+                   "FastERP · Synthetic accounting workspace · 2026-07-28")
     for index, (title, image, bullets, paragraphs) in enumerate(parse(source)):
         slide = prs.slides.add_slide(blank)
         if index == 0:
             bg = slide.background.fill
             bg.solid()
             bg.fore_color.rgb = AMBER
-            box = textbox(slide, Inches(1), Inches(2.25), Inches(11.3), Inches(2.4),
-                          [title, "Accounting Workspace User Guide",
-                           "Self-contained synthetic demonstration"], 24, WHITE)
+            subtitle = ("Raamatupidamise tööruumi kasutusjuhend"
+                        if estonian else "Accounting Workspace User Guide")
+            tagline = ("Iseseisev sünteetiline näidis"
+                       if estonian else "Self-contained synthetic demonstration")
+            box = textbox(slide, Inches(.75), Inches(.45), Inches(11.8), Inches(1.45),
+                          [title, subtitle, tagline], 18, WHITE)
             for p in box.text_frame.paragraphs:
                 p.alignment = PP_ALIGN.CENTER
-            box.text_frame.paragraphs[0].font.size = Pt(48)
+            box.text_frame.paragraphs[0].font.size = Pt(34)
             box.text_frame.paragraphs[0].font.bold = True
+            if image and os.path.isfile(os.path.join(base, image)):
+                slide.shapes.add_picture(os.path.join(base, image), Inches(3.0), Inches(2.0),
+                                         width=Inches(7.33))
             continue
         band = slide.shapes.add_shape(1, 0, 0, prs.slide_width, Inches(.92))
         band.fill.solid()
@@ -95,7 +105,7 @@ def build(source, output):
             slide.shapes.add_picture(os.path.join(base, image), Inches(6.15), Inches(1.35),
                                      width=Inches(6.65))
         footer = textbox(slide, Inches(.5), Inches(7.08), Inches(12.3), Inches(.25),
-                         ["FastERP · Synthetic accounting workspace · 2026-07-28"], 8, MUTE)
+                         [footer_text], 8, MUTE)
         footer.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
     prs.save(output)
     print(f"Built {output} ({len(prs.slides)} slides)")

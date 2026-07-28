@@ -1,8 +1,8 @@
 ::: cover
 
-# FastERP
+# FastERP User Guide
 
-#### Accounting Workspace User Guide
+![FastERP sign in](guide/screenshots/01-login.png)
 
 **Sell, ship, invoice, get paid — and keep balanced books.**
 
@@ -12,147 +12,160 @@ Self-contained synthetic demonstration · No Intuit connection
 
 ---
 
-## Start FastERP
+## Operations dashboard
 
-```bash
-python -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-cp .env.sample .env
-.venv/bin/python seed.py
-.venv/bin/python web_app.py
-```
+![Operations dashboard](guide/screenshots/02-dashboard.png)
 
-Open `http://localhost:5011` and sign in as
-`admin@fasterp.example` / `FastERP2026$`. The data is deterministic and
-synthetic; rerunning `seed.py` restores the demo baseline.
+Start at the daily cockpit for paid revenue, receivables, inventory value and
+open orders. The charts highlight order status, aging debt and low-stock items.
+Collapse the AI rail whenever you need a wider working area.
 
-The left sidebar groups Selling, Buying, Stock and Accounting. Collapse the AI
-rail when you want more room for reports.
+---
+
+## Sales orders
+
+![Sales orders](guide/screenshots/03-orders.png)
+
+Open **Selling → Sales Orders** to filter the order book by status or search for
+a customer or reference. Each row exposes delivery timing, workflow state and
+total value.
+
+---
+
+## Order-to-cash workflow
+
+![Sales order detail](guide/screenshots/04-order-detail.png)
+
+An order detail page combines customer data, line items, totals and the next
+transactional action. Move eligible orders through Confirm, Deliver and Invoice;
+delivery adjusts stock and invoicing creates balanced accounting entries.
+
+---
+
+## Invoices and receivables
+
+![Invoices](guide/screenshots/05-invoices.png)
+
+Use **Invoices (AR)** to review outstanding, partly paid, paid and overdue
+invoices. Record a payment from an order or invoice workflow to clear Accounts
+Receivable and increase Cash.
+
+---
+
+## Items and stock
+
+![Items and stock](guide/screenshots/06-items.png)
+
+The stock register shows item codes, groups, selling rates, quantities, values
+and reorder status. Filter by item group or search the catalog to investigate
+availability before confirming demand.
+
+---
+
+## Suppliers
+
+![Suppliers](guide/screenshots/07-suppliers.png)
+
+The supplier register summarizes territory, purchase-order count and total
+spend. Add synthetic suppliers here before creating a purchasing transaction.
+
+---
+
+## Purchase order and goods receipt
+
+![Purchase order](guide/screenshots/08-purchase-order.png)
+
+A purchase order records supplier, line items and workflow status. Receiving an
+ordered PO increases stock and posts Inventory against Accounts Payable, linking
+procurement to the general ledger.
 
 ---
 
 ## Accounting overview
 
-![Accounting overview](demo/frames/erp-06-accounting.png)
+![Accounting overview](guide/screenshots/09-accounting.png)
 
-Open **Accounting → Overview** for the finance cockpit. The KPI row summarizes
-cash and bank, receivables, payables and net income. Below it, review the current
-profit-and-loss snapshot, active projects and latest ledger postings.
-
-Use **New expense** for supplier costs and **Journal entry** for controlled
-adjustments. Every posted workflow writes balanced debit and credit lines.
+Open **Accounting → Overview** for cash, receivables, payables and net income.
+Review the Profit & Loss snapshot, active projects and latest postings, or start
+a new expense or manual journal.
 
 ---
 
-## Record a categorized expense
+## Chart of accounts
 
-![New expense](demo/frames/erp-07-expense.png)
+![Chart of accounts](guide/screenshots/10-accounts.png)
 
-Choose a supplier and expense account, then enter the net amount. Select a tax
-code and transaction currency; FastERP converts the posting to GBP using the
-seeded rate while retaining the source currency.
+The 22-account chart groups assets, liabilities, equity, income, cost of sales
+and operating expenses. Select an account to trace its postings in the General
+Ledger.
 
-Optionally assign a **business unit** and **project**. These dimensions flow to
-the ledger and project profitability report. Add an approval or receipt note,
-then select **Post expense**.
+---
+
+## Record an expense
+
+![New expense](guide/screenshots/11-expense.png)
+
+Choose a supplier and expense category, then enter the net amount, tax code and
+currency. Optional business-unit and project dimensions flow to ledger lines and
+profitability reporting. A note can retain approval or receipt context.
 
 ---
 
 ## Post a journal entry
 
-Open **Accounting → Journal Entries → New journal**. Enter a date and memo, then
-add two or more lines:
+![New journal entry](guide/screenshots/12-journal.png)
 
-1. Select an account.
-2. Enter either a debit or credit.
-3. Optionally allocate the line to a business unit and project.
-4. Confirm total debits equal total credits.
-
-FastERP rejects an unbalanced journal and leaves the books unchanged. Posted
-journals appear in both the journal register and General Ledger.
+Enter a date and memo, then add at least two account lines. Each line may carry a
+business unit and project. FastERP rejects the journal unless total debits equal
+total credits.
 
 ---
 
-## Review projects and business units
+## General ledger
 
-![Projects](demo/frames/erp-08-projects.png)
+![General ledger](guide/screenshots/13-ledger.png)
 
-The Projects page combines customer, owning business unit, status, budget,
-revenue, costs and margin. Expense and journal allocations update costs
-immediately.
-
-The synthetic setup includes UK Operations, Continental Europe and North
-America. Use these dimensions to compare operational areas without creating
-separate ledgers.
+The Trial Balance summarizes debits, credits and normal-side balances. Filter
+ledger entries by account and use shared references such as `INV-7042`,
+`EXP-8001` and `JE-9001` to follow linked transactions.
 
 ---
 
-## Run financial reports
+## Projects and business units
 
-![Profit and loss](demo/frames/erp-09-reports.png)
+![Projects](guide/screenshots/14-projects.png)
 
-Open **Accounting → Reports** and switch between:
-
-- **Profit & Loss** — income, cost of goods sold, operating expenses and result.
-- **Balance Sheet** — assets, liabilities and equity.
-- **Trial Balance** — account debits, credits and normal-side balances.
-- **Sales Tax** — taxable purchases and input tax by period.
-
-All reports are accrual-basis and presented in GBP from posted ledger entries.
+Projects combine customer, owning business unit, status, budget, revenue, costs
+and margin. Dimensioned expenses and journals update project costs immediately
+without requiring separate ledgers.
 
 ---
 
-## Configure accounting dimensions
+## Financial reports
 
-![Accounting setup](demo/frames/erp-10-setup.png)
+![Profit and loss](guide/screenshots/15-reports.png)
 
-**Accounting → Setup** lists the seeded reference data:
-
-- GBP, EUR, USD and CAD exchange rates.
-- UK, EU and North America business units.
-- zero, exempt, reduced and standard VAT codes.
-- synthetic receipt images and notes.
-
-Receipt SVGs live under `docs/assets/receipts/`. They contain no real supplier,
-person or payment data.
+Switch between Profit & Loss, Balance Sheet, Trial Balance and Sales Tax. Reports
+are accrual-basis, presented in GBP and derived solely from posted double-entry
+transactions.
 
 ---
 
-## Follow linked operational transactions
+## Accounting setup and attachments
 
-Sales invoices post Accounts Receivable, Sales Revenue, Cost of Goods Sold and
-Inventory. Recording payment moves the balance from Accounts Receivable to
-Cash. Receiving a purchase order increases Inventory and Accounts Payable.
+![Accounting setup](guide/screenshots/16-setup.png)
 
-Use **General Ledger** to filter an account and trace the shared transaction
-reference, such as `INV-7042`, `PO-6018`, `EXP-8001` or `JE-9001`. This creates a
-clear audit trail between operational workflows and accounting.
+Setup lists GBP, EUR, USD and CAD rates, tax codes, business units and synthetic
+receipt attachments. The rates and tax treatment are illustrative; the receipt
+images contain no real supplier or payment information.
 
 ---
 
-## Explore the integration API
+## Integration API and Swagger
 
-![Swagger API](demo/frames/erp-11-api.png)
+![Swagger API](guide/screenshots/17-api.png)
 
-Run the API separately:
-
-```bash
-.venv/bin/uvicorn api_app:app --port 5012
-```
-
-Open `http://localhost:5012/docs` for Swagger UI. The stub exposes accounts,
-invoices, expenses, projects, Profit & Loss, Trial Balance and a webhook example.
-`POST /v1/invoices` validates and previews a payload but deliberately does not
-post it. The API is a future connector boundary, not an Intuit integration.
-
----
-
-## Verification and safety
-
-Run `.venv/bin/python -m pytest -q` before changing accounting behavior. Tests
-assert that seeded books and new postings remain balanced, invalid journals are
-rejected, and API previews are non-posting.
-
-FastERP is a demonstration, not production accounting software. Exchange rates,
-tax treatment and reports are illustrative. Never replace the synthetic database
-or receipt assets with personal, banking or customer production data.
+Run `.venv/bin/uvicorn api_app:app --port 5012` and open
+`http://localhost:5012/docs`. The read-mostly FastAPI stub documents accounts,
+invoices, expenses, projects, reports and webhook examples. Invoice POSTs
+validate previews without posting to the books.

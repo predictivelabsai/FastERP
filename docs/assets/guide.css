@@ -7,9 +7,10 @@
 html { font-size: 11.5pt; }
 body { font-family: "DejaVu Sans", Arial, sans-serif; color: #27211a; line-height: 1.45; margin: 0; }
 hr { page-break-after: always; border: 0; height: 0; margin: 0; visibility: hidden; }
-.cover { text-align: center; padding-top: 4cm; }
+.cover { text-align: center; padding-top: .5cm; }
 .cover h1 { color: #d97706; font-size: 42pt; margin: 0 0 .4cm; }
 .cover h4 { color: #5b5246; font-size: 18pt; margin: .2cm; }
+.cover img { float: none; display: block; margin: .4cm auto; max-width: 15cm; max-height: 9.2cm; }
 h2 { color: white; background: #d97706; border-left: 7px solid #16a34a;
   border-radius: 7px; font-size: 17pt; padding: .28cm .5cm; margin: 0 0 .55cm; }
 h3 { color: #b45309; }

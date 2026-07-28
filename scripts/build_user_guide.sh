@@ -2,16 +2,31 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SOURCE="${1:-docs/FastERP_user_guide_2026-07-28.md}"
-BASE="${SOURCE%.md}"
-HTML="${BASE}.html"
+if [ "${1:-}" != "" ]; then
+  SOURCES=("$1")
+else
+  SOURCES=(
+    "docs/FastERP_user_guide_2026-07-28.md"
+    "docs/FastERP_user_guide_2026-07-28_ee.md"
+  )
+fi
 
-pandoc "$SOURCE" -s -o "$HTML" \
-  --from=markdown-implicit_figures \
-  --css assets/guide.css \
-  --metadata pagetitle="FastERP Accounting Workspace User Guide"
-weasyprint "$HTML" "${BASE}.pdf"
-rm -f "$HTML"
-.venv/bin/python scripts/build_pptx.py "$SOURCE" "${BASE}.pptx"
+for SOURCE in "${SOURCES[@]}"; do
+  BASE="${SOURCE%.md}"
+  HTML="${BASE}.html"
+  TITLE="FastERP Accounting Workspace User Guide"
+  CSS="assets/guide.css"
+  if [[ "$SOURCE" == *_ee.md ]]; then
+    TITLE="FastERP raamatupidamise tööruumi kasutusjuhend"
+    CSS="assets/guide_ee.css"
+  fi
 
-echo "Built ${BASE}.pdf and ${BASE}.pptx"
+  pandoc "$SOURCE" -s -o "$HTML" \
+    --from=markdown-implicit_figures \
+    --css "$CSS" \
+    --metadata pagetitle="$TITLE"
+  weasyprint "$HTML" "${BASE}.pdf"
+  rm -f "$HTML"
+  .venv/bin/python scripts/build_pptx.py "$SOURCE" "${BASE}.pptx"
+  echo "Built ${BASE}.pdf and ${BASE}.pptx"
+done

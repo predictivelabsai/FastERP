@@ -1,0 +1,8 @@
+@import url("guide.css");
+
+@page {
+  size: A4 landscape;
+  margin: 1.1cm 1.5cm 1.3cm;
+  @bottom-left { content: "FastERP · Sünteetiline raamatupidamise tööruum"; font-size: 8pt; color: #9a8f7f; }
+  @bottom-right { content: "2026-07-28 · näidisjuhend"; font-size: 8pt; color: #9a8f7f; }
+}

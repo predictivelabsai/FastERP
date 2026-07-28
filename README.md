@@ -20,6 +20,10 @@ grounded in the live demo company.
 · [PowerPoint](docs/FastERP_user_guide_2026-07-28.pptx)
 · [Web-friendly guide](docs/FastERP_user_guide_2026-07-28.md)
 
+**[Laadi alla eestikeelne tootejuhend (PDF)](docs/FastERP_user_guide_2026-07-28_ee.pdf)**
+· [PowerPoint](docs/FastERP_user_guide_2026-07-28_ee.pptx)
+· [Markdown](docs/FastERP_user_guide_2026-07-28_ee.md)
+
 ## Quickstart (native)
 
 ```bash
