@@ -177,7 +177,7 @@ class SQLiteBackend:
 
 def _serialise_row(row: sqlite3.Row) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for key in row:
+    for key in row.keys():
         value = row[key]
         if isinstance(value, bytes):
             value = value.hex()
