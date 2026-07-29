@@ -28,7 +28,9 @@ from starlette.responses import StreamingResponse, Response, FileResponse
 
 import db
 from web.layout import page, LAYOUT_CSS
-from web import views, ai, accounting
+from web import views, ai
+from web.landing import landing_page
+from web import google_auth, accounting
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger("fasterp")
@@ -87,6 +89,27 @@ def post(session, email: str = "", password: str = ""):
     return _login_card("Invalid email or password.", email)
 
 
+
+@rt("/auth/google")
+def google_start(session, request):
+    if not google_auth.enabled():
+        return RedirectResponse("/login?error=Google+sign-in+is+not+configured", status_code=303)
+    state = google_auth.new_state()
+    session["google_oauth_state"] = state
+    return RedirectResponse(google_auth.authorize_url(request, state), status_code=303)
+
+
+@rt("/auth/google/callback")
+def google_callback(session, request, code: str = "", state: str = "", error: str = ""):
+    if error or not code or state != session.pop("google_oauth_state", None):
+        return RedirectResponse("/login?error=Google+sign-in+failed", status_code=303)
+    identity = google_auth.exchange(request, code)
+    if not identity:
+        return RedirectResponse("/login?error=Google+account+is+not+authorised", status_code=303)
+    session["user"] = identity["email"]
+    return RedirectResponse("/", status_code=303)
+
+
 @rt("/logout")
 def get(session):
     session.pop("user", None)
@@ -95,6 +118,8 @@ def get(session):
 
 @rt("/")
 def get(session):
+    if not _user(session):
+        return landing_page()
     return _guard(session, "dashboard", views.dashboard)
 
 
