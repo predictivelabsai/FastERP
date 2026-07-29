@@ -21,6 +21,8 @@ CSS = """
 .lp-hero{max-width:1180px;margin:auto;padding:104px 24px 76px} .lp-kicker{color:var(--accent);font-size:12px;font-weight:750;text-transform:uppercase;letter-spacing:.16em}
 .lp-hero h1{font-size:clamp(42px,7vw,78px);line-height:1.02;letter-spacing:-.055em;max-width:920px;margin:22px 0} .lp-lede{font-size:20px;line-height:1.65;color:var(--muted);max-width:720px}
 .lp-actions{display:flex;gap:12px;margin-top:32px;flex-wrap:wrap} .lp-secondary{color:var(--ink);font-weight:650;text-decoration:none;padding:10px 4px}
+.lp-demo{max-width:960px;margin:0 auto 76px;padding:0 24px} .lp-demo-frame{padding:10px;background:#fff;border:1px solid var(--line);border-radius:22px;box-shadow:0 24px 70px rgba(17,24,39,.10)}
+.lp-demo img{display:block;width:100%;height:auto;border-radius:14px;background:var(--tint)} .lp-demo p{margin:13px 0 2px;text-align:center;color:var(--muted);font-size:13px}
 .lp-band{background:var(--tint);border-block:1px solid color-mix(in srgb,var(--accent) 15%,white)} .lp-grid{max-width:1180px;margin:auto;padding:64px 24px;display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
 .lp-card{background:rgba(255,255,255,.82);border:1px solid color-mix(in srgb,var(--accent) 15%,white);border-radius:20px;padding:26px} .lp-num{color:var(--accent);font-size:12px;font-weight:750} .lp-card h2{font-size:20px;margin:24px 0 8px} .lp-card p{color:var(--muted);line-height:1.6;margin:0}
 .lp-footer{max-width:1180px;margin:auto;padding:30px 24px 48px;color:var(--muted);font-size:13px;display:flex;justify-content:space-between;gap:20px}
@@ -46,6 +48,10 @@ def landing_page():
                         Div(Button("Sign In or Register", type="button", onclick="authOpen('login')", cls="lp-primary"),
                             A("Explore the open-source suite →", href="https://fastsme.com/products", cls="lp-secondary"),
                             cls="lp-actions"), cls="lp-hero"),
+                Section(Div(Img(src="/static/product-demo.gif", alt="FastERP product tour",
+                                loading="eager", width="1854", height="909"),
+                            P("Product tour · see the workspace in action"),
+                            cls="lp-demo-frame"), cls="lp-demo", aria_label="FastERP product tour"),
                 Section(Div(*[Article(Span(f"0{i}", cls="lp-num"), H2(title),
                                       P("Everything you need for " + title.lower() + ", in one focused workspace."),
                                       cls="lp-card") for i, title in enumerate(features, 1)],
