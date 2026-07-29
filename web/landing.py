@@ -1,10 +1,16 @@
 """Public FastERP product landing page."""
+from urllib.parse import quote
+
 from fasthtml.common import *
 
 from .account_auth import AUTH_CSS, AUTH_JS, auth_modal
 
 ACCENT = "#2563eb"
 TINT = "#eff6ff"
+FAVICON = "data:image/svg+xml," + quote(
+    """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#2563eb"/><path fill="white" d="M16 4 28 16 16 28 4 16Z"/><path fill="#2563eb" d="M11 10h11v4h-7v3h6v4h-6v5h-4Z"/></svg>""",
+    safe="",
+)
 
 CSS = """
 :root{--accent:#2563eb;--tint:#eff6ff;--ink:#111827;--muted:#667085;--line:#e7eaf0}
@@ -27,6 +33,7 @@ def landing_page():
         Head(Title("FastERP · FastSME"), Meta(charset="utf-8"),
              Meta(name="viewport", content="width=device-width, initial-scale=1"),
              Meta(name="description", content="Connect sales, purchasing, inventory, invoicing, payments, projects, expenses, and the general ledger."),
+             Link(rel="icon", type="image/svg+xml", href=FAVICON),
              Link(rel="preconnect", href="https://fonts.googleapis.com"),
              Link(rel="stylesheet", href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;750&display=swap"),
              Style(CSS + AUTH_CSS)),
