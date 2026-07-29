@@ -24,13 +24,15 @@ from fasthtml.common import (
     fast_app, serve, Div, H1, P, A, Form, Input, Button, NotStr,
     RedirectResponse, Script, Style, Link, Title,
 )
-from starlette.responses import StreamingResponse, Response, FileResponse
+from starlette.responses import StreamingResponse, Response, FileResponse, JSONResponse
 
 import db
 from web.layout import page, LAYOUT_CSS
 from web import views, ai
 from web.landing import landing_page
+from web.developer import developer_page
 from web import account_auth, google_auth, accounting
+from web.api import api
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger("fasterp")
@@ -42,9 +44,20 @@ SECRET = os.getenv("FASTERP_SECRET", secrets.token_hex(32))
 PORT = int(os.getenv("FASTERP_PORT", "5011"))
 
 app, rt = fast_app(live=False, pico=False, secret_key=SECRET, hdrs=[Style(LAYOUT_CSS)])
+app.mount("/api", api)
 
 
 account_auth.register_fasthtml_routes(rt, app_name="FastERP", session_key="user", success_path="/")
+
+
+@rt("/swagger.json")
+def get():
+    return JSONResponse(api.openapi())
+
+
+@rt("/developers", methods=["GET"])
+def developers():
+    return developer_page()
 
 
 def _user(session):

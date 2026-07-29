@@ -131,7 +131,8 @@ NAV_ITEMS = [
                     ("projects", "Projects", "🎯", "/accounting/projects"),
                     ("reports", "Reports", "📈", "/accounting/reports"),
                     ("accounting_setup", "Setup", "⚙️", "/accounting/setup")]),
-    ("HELP", [("guide", "User Guide", "📖", "/guide")]),
+    ("HELP", [("guide", "User Guide", "📖", "/guide"),
+              ("developers", "Developers", "⌘", "/developers")]),
 ]
 SAMPLE_QUESTIONS = ["What's outstanding from customers?", "Which items are low on stock?", "How are sales orders tracking?"]
 
