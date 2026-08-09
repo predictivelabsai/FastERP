@@ -112,7 +112,11 @@ def auth_modal(app_name: str):
 class AccountStore:
     def __init__(self):
         path = Path(os.getenv("FASTSME_AUTH_DB", "data/fastsme-accounts.sqlite"))
-        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            path = Path(__file__).resolve().parents[1] / "data" / "fastsme-accounts.sqlite"
+            path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self._setup()
 

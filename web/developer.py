@@ -3,6 +3,7 @@ from fasthtml.common import *
 
 from .api import RESOURCES
 from .landing import FAVICON
+from .seo import seo_meta
 
 ACCENT = "#2563eb"
 TINT = "#eff6ff"
@@ -78,6 +79,11 @@ def developer_page():
             Meta(charset="utf-8"),
             Meta(name="viewport", content="width=device-width, initial-scale=1"),
             Meta(name="description", content="Developer API documentation for FastERP."),
+            *seo_meta(
+                path="/developers",
+                title="FastERP Developer API · FastSME",
+                description="Build integrations with the public FastERP API, OpenAPI schemas, examples, and token-gated writes.",
+            ),
             Link(rel="icon", type="image/svg+xml", href=FAVICON),
             Link(rel="preconnect", href="https://fonts.googleapis.com"),
             Link(rel="stylesheet", href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;750&display=swap"),

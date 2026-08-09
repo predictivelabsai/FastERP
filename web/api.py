@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import db
 
-from .api_core import Resource, SQLiteBackend, create_sqlite_api
+from .api_core import PostgresBackend, Resource, SQLiteBackend, create_sqlite_api
 
 
 RESOURCES = (
@@ -47,7 +47,11 @@ RESOURCES = (
     ),
 )
 
-backend = SQLiteBackend(db.DB_PATH, RESOURCES, initialize=db.init_schema)
+backend = (
+    PostgresBackend(db.postgres_database(), RESOURCES)
+    if db.using_postgres()
+    else SQLiteBackend(db.DB_PATH, RESOURCES, initialize=db.init_schema)
+)
 api = create_sqlite_api(
     product="FastERP",
     version="1.0.0",
@@ -68,8 +72,9 @@ def profit_and_loss(
     data = db.profit_and_loss(business_unit_id, project_id)
     income = sum(row["amount"] for row in data if row["section"] == "Income")
     expenses = sum(row["amount"] for row in data if row["section"] == "Expenses")
+    currency = db.current_company()["local_currency"] if db.using_postgres() else "GBP"
     return {
-        "currency": "GBP",
+        "currency": currency,
         "rows": data,
         "net_income": round(income - expenses, 2),
     }
@@ -80,8 +85,9 @@ def trial_balance():
     """Return the current account balances and balance check."""
 
     totals = db.gl_totals()
+    currency = db.current_company()["local_currency"] if db.using_postgres() else "GBP"
     return {
-        "currency": "GBP",
+        "currency": currency,
         "balanced": totals["balanced"],
         "rows": db.trial_balance(),
     }

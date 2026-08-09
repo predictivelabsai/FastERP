@@ -8,7 +8,8 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from starlette.responses import JSONResponse
+
+from fasterp.database import Database
 
 
 class ErrorDetail(BaseModel):
@@ -175,18 +178,168 @@ class SQLiteBackend:
         return created or clean
 
 
-def _serialise_row(row: sqlite3.Row) -> dict[str, Any]:
+class PostgresBackend:
+    """Company-scoped public API adapter for the FastERP PostgreSQL schema."""
+
+    def __init__(self, database: Database, resources: tuple[Resource, ...]) -> None:
+        self.database = database
+        self.resources = {resource.slug: resource for resource in resources}
+
+    @contextmanager
+    def connection(self):
+        with self.database.connection() as connection:
+            yield connection
+
+    def columns(self, resource: Resource) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            table_rows = connection.execute(
+                """SELECT column_name AS name,data_type AS type,
+                          CASE WHEN is_nullable='NO' THEN 1 ELSE 0 END AS notnull,
+                          column_default AS dflt_value
+                     FROM information_schema.columns
+                    WHERE table_schema=current_schema() AND table_name=%s
+                    ORDER BY ordinal_position""",
+                (resource.table,),
+            ).fetchall()
+            primary = {
+                row["column_name"]
+                for row in connection.execute(
+                    """SELECT kcu.column_name
+                         FROM information_schema.table_constraints tc
+                         JOIN information_schema.key_column_usage kcu
+                           ON kcu.constraint_name=tc.constraint_name
+                          AND kcu.table_schema=tc.table_schema
+                        WHERE tc.table_schema=current_schema() AND tc.table_name=%s
+                          AND tc.constraint_type='PRIMARY KEY'""",
+                    (resource.table,),
+                ).fetchall()
+            }
+        if not table_rows:
+            raise RuntimeError(f"API resource {resource.slug!r} references a missing table")
+        return [{**row, "pk": 1 if row["name"] in primary else 0} for row in table_rows]
+
+    def primary_key(self, resource: Resource) -> str:
+        if resource.primary_key:
+            return resource.primary_key
+        columns = self.columns(resource)
+        primary = next((column["name"] for column in columns if column["pk"]), None)
+        return primary or columns[0]["name"]
+
+    @staticmethod
+    def _company(connection) -> dict[str, Any]:
+        configured = os.getenv("FASTERP_COMPANY_CODE", "").strip()
+        sql = "SELECT * FROM companies WHERE active=true"
+        params: tuple[Any, ...] = ()
+        if configured:
+            sql += " AND code=%s"
+            params = (configured,)
+        company = connection.execute(sql + " ORDER BY id LIMIT 1", params).fetchone()
+        if not company:
+            raise RuntimeError("No active FastERP API company is configured")
+        return company
+
+    def list(
+        self,
+        resource: Resource,
+        *,
+        limit: int,
+        offset: int,
+        query: str | None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        columns = {column["name"] for column in self.columns(resource)}
+        where: list[str] = []
+        params: list[Any] = []
+        with self.connection() as connection:
+            if "company_id" in columns:
+                where.append("company_id=%s")
+                params.append(self._company(connection)["id"])
+            if query and resource.search_fields:
+                where.append("(" + " OR ".join(
+                    f'CAST("{field}" AS TEXT) ILIKE %s' for field in resource.search_fields
+                ) + ")")
+                params.extend([f"%{query}%"] * len(resource.search_fields))
+            clause = " WHERE " + " AND ".join(where) if where else ""
+            total = connection.execute(
+                f'SELECT count(*) AS value FROM "{resource.table}"{clause}', params
+            ).fetchone()["value"]
+            result = connection.execute(
+                f'SELECT * FROM "{resource.table}"{clause} '
+                f'ORDER BY "{self.primary_key(resource)}" LIMIT %s OFFSET %s',
+                (*params, limit, offset),
+            ).fetchall()
+        return [_serialise_row(row) for row in result], total
+
+    def get(self, resource: Resource, item_id: str) -> dict[str, Any] | None:
+        columns = {column["name"] for column in self.columns(resource)}
+        with self.connection() as connection:
+            params: list[Any] = [item_id]
+            company_clause = ""
+            if "company_id" in columns:
+                company_clause = " AND company_id=%s"
+                params.append(self._company(connection)["id"])
+            row = connection.execute(
+                f'SELECT * FROM "{resource.table}" '
+                f'WHERE "{self.primary_key(resource)}"=%s{company_clause}',
+                params,
+            ).fetchone()
+        return _serialise_row(row) if row else None
+
+    def create(self, resource: Resource, values: dict[str, Any]) -> dict[str, Any]:
+        allowed = set(resource.write_fields)
+        clean = {key: value for key, value in values.items() if key in allowed and value is not None}
+        if not clean:
+            raise ValueError("At least one writable field is required")
+        if resource.table != "customers":
+            raise ValueError("This PostgreSQL resource does not support direct creation")
+        with self.database.transaction() as connection:
+            company = self._company(connection)
+            serial = connection.execute(
+                "SELECT COALESCE(max(id),0)+1 AS value FROM business_partners"
+            ).fetchone()["value"]
+            code = f"CUS-{serial:06d}"
+            partner_id = connection.execute(
+                """INSERT INTO business_partners
+                       (company_id,code,name,default_currency,credit_limit)
+                   VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    company["id"], code, clean["name"], company["local_currency"],
+                    clean.get("credit_limit"),
+                ),
+            ).fetchone()["id"]
+            connection.execute(
+                "INSERT INTO business_partner_roles(partner_id,role) VALUES (%s,'Customer')",
+                (partner_id,),
+            )
+            customer_id = connection.execute(
+                """INSERT INTO customers
+                       (company_id,code,name,territory,credit_limit,currency,partner_id,created)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,current_date) RETURNING id""",
+                (
+                    company["id"], code, clean["name"], clean.get("territory"),
+                    clean.get("credit_limit"), company["local_currency"], partner_id,
+                ),
+            ).fetchone()["id"]
+        return self.get(resource, str(customer_id)) or clean
+
+
+def _serialise_row(row) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key in row.keys():
         value = row[key]
         if isinstance(value, bytes):
             value = value.hex()
+        elif isinstance(value, (date, datetime)):
+            value = value.isoformat()
+        elif isinstance(value, Decimal):
+            value = float(value)
         result[key] = value
     return result
 
 
 def _python_type(sql_type: str) -> type[Any]:
     normalized = (sql_type or "").upper()
+    if "BOOL" in normalized:
+        return bool
     if "INT" in normalized:
         return int
     if any(token in normalized for token in ("REAL", "FLOA", "DOUB", "NUM", "DEC")):
@@ -197,7 +350,7 @@ def _python_type(sql_type: str) -> type[Any]:
 
 
 def _models_for(
-    backend: SQLiteBackend,
+    backend: SQLiteBackend | PostgresBackend,
     resource: Resource,
 ) -> tuple[type[BaseModel], type[BaseModel], type[BaseModel] | None]:
     fields: dict[str, tuple[Any, Any]] = {}
@@ -282,7 +435,7 @@ def create_sqlite_api(
     version: str,
     description: str,
     base_url: str,
-    backend: SQLiteBackend,
+    backend: SQLiteBackend | PostgresBackend,
     resources: tuple[Resource, ...],
 ) -> FastAPI:
     """Create the product API and register its typed resource routes."""

@@ -1,4 +1,4 @@
-"""FastAPI integration surface for future FastERP connectors.
+"""Standalone FastAPI integration surface for FastERP.
 
 Run with: uvicorn api_app:app --port 5012
 Swagger UI: http://localhost:5012/docs
@@ -8,8 +8,11 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Query
 from pydantic import BaseModel, Field
+
+load_dotenv()
 
 import db
 
@@ -23,7 +26,7 @@ app = FastAPI(
     title="FastERP Integration API",
     version="0.1.0",
     description=(
-        "A self-contained, read-mostly integration stub for the synthetic FastERP demo. "
+        "A self-contained integration surface for the FastERP demo. "
         "Its resource shapes are inspired by common small-business accounting workflows; "
         "it does not connect to or implement the Intuit API."
     ),
@@ -46,7 +49,7 @@ class InvoiceDraft(BaseModel):
     currency: str = Field(default="GBP", min_length=3, max_length=3, examples=["EUR"])
     business_unit: str | None = Field(default=None, examples=["EU"])
     project_code: str | None = Field(default=None, examples=["PRJ-101"])
-    note: str | None = Field(default=None, examples=["Created by a future commerce connector"])
+    note: str | None = Field(default=None, examples=["Created by a commerce connector"])
     lines: list[InvoiceLine]
 
 
@@ -63,7 +66,7 @@ def root():
 
 @app.get("/health", tags=["System"])
 def health():
-    return {"status": "ok", "database": db.DB_PATH, "synthetic_data": True}
+    return {"status": "ok", "database": db.backend_label(), "synthetic_data": True}
 
 
 @app.get("/v1/accounts", tags=["Accounting"])
@@ -78,10 +81,17 @@ def list_invoices(
 ):
     sql = """SELECT i.*, c.name customer FROM invoices i
              LEFT JOIN customers c ON c.id=i.customer_id"""
+    company_id = db.current_company_id()
+    where = []
     params: tuple = ()
+    if company_id is not None:
+        where.append("i.company_id=?")
+        params += (company_id,)
     if status:
-        sql += " WHERE i.status=?"
-        params = (status,)
+        where.append("i.status=?")
+        params += (status,)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY i.invoice_date DESC LIMIT ?"
     return {"data": db.rows(sql, params + (limit,)), "next_cursor": None}
 
@@ -117,13 +127,15 @@ def profit_and_loss(
     data = db.profit_and_loss(business_unit_id, project_id)
     income = sum(x["amount"] for x in data if x["section"] == "Income")
     expenses = sum(x["amount"] for x in data if x["section"] == "Expenses")
-    return {"currency": "GBP", "rows": data, "net_income": round(income - expenses, 2)}
+    currency = db.current_company()["local_currency"] if db.using_postgres() else "GBP"
+    return {"currency": currency, "rows": data, "net_income": round(income - expenses, 2)}
 
 
 @app.get("/v1/reports/trial-balance", tags=["Reports"])
 def trial_balance():
     totals = db.gl_totals()
-    return {"currency": "GBP", "balanced": totals["balanced"], "rows": db.trial_balance()}
+    currency = db.current_company()["local_currency"] if db.using_postgres() else "GBP"
+    return {"currency": currency, "balanced": totals["balanced"], "rows": db.trial_balance()}
 
 
 @app.post("/v1/webhooks/example", tags=["Integration examples"])

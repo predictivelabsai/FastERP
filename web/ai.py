@@ -16,8 +16,18 @@ def snapshot() -> str:
     obs = db.orders_by_status()
     tb = db.trial_balance()
     payable = next((r["balance"] for r in tb if r["account"] == "Accounts Payable"), 0)
-    open_po = db.scalar("SELECT COUNT(*) FROM purchase_orders WHERE status='Ordered'") or 0
-    n_sup = db.scalar("SELECT COUNT(*) FROM suppliers") or 0
+    company_id = db.current_company_id()
+    if company_id is not None:
+        open_po = db.scalar(
+            "SELECT COUNT(*) FROM purchase_orders WHERE company_id=? AND status='Ordered'",
+            (company_id,),
+        ) or 0
+        n_sup = db.scalar(
+            "SELECT COUNT(*) FROM suppliers WHERE company_id=?", (company_id,)
+        ) or 0
+    else:
+        open_po = db.scalar("SELECT COUNT(*) FROM purchase_orders WHERE status='Ordered'") or 0
+        n_sup = db.scalar("SELECT COUNT(*) FROM suppliers") or 0
     lines = [
         "ERP SNAPSHOT (synthetic order-to-cash + inventory + buying + GL):",
         f"- Revenue (paid invoices): {money(k['revenue'])}. Receivables outstanding: {money(k['receivable'])} "
@@ -59,27 +69,51 @@ def handle_command(text):
         return "**Sales orders by status**\n\n" + _table(
             ["Status", "Orders", "Value"], [[o["status"], o["count"], money(o["value"])] for o in db.orders_by_status()])
     if cmd == "ar":
-        r = db.rows("SELECT status, COUNT(*) n, ROUND(SUM(total-paid)) due FROM invoices WHERE status!='Paid' GROUP BY status")
+        company_id = db.current_company_id()
+        where = "company_id=? AND status!='Paid'" if company_id is not None else "status!='Paid'"
+        r = db.rows(
+            f"""SELECT status, COUNT(*) n, ROUND(SUM(total-paid)) due
+                  FROM invoices WHERE {where} GROUP BY status""",
+            (company_id,) if company_id is not None else (),
+        )
         if not r:
             return "No outstanding receivables. 🎉"
         return "**Receivables aging**\n\n" + _table(["Status", "Invoices", "Outstanding"],
                                                     [[x["status"], x["n"], money(x["due"])] for x in r])
     if cmd == "stock":
-        r = db.rows("SELECT name, stock_qty, reorder_level, uom FROM items WHERE stock_qty<=reorder_level ORDER BY stock_qty LIMIT 15")
+        company_id = db.current_company_id()
+        where = "company_id=? AND stock_qty<=reorder_level" if company_id is not None else "stock_qty<=reorder_level"
+        r = db.rows(
+            f"""SELECT name, stock_qty, reorder_level, uom FROM items
+                  WHERE {where} ORDER BY stock_qty LIMIT 15""",
+            (company_id,) if company_id is not None else (),
+        )
         if not r:
             return "All items above reorder level. 🎉"
         return "**Low-stock items**\n\n" + _table(["Item", "In stock", "Reorder at"],
                                                   [[x["name"], f"{x['stock_qty']:.0f} {x['uom']}", f"{x['reorder_level']:.0f}"] for x in r])
     if cmd == "top":
-        r = db.rows("""SELECT c.name, ROUND(SUM(i.total-i.paid)) due FROM invoices i
-                       JOIN customers c ON c.id=i.customer_id WHERE i.status!='Paid'
-                       GROUP BY c.id ORDER BY due DESC LIMIT 10""")
+        company_id = db.current_company_id()
+        company_where = "i.company_id=? AND " if company_id is not None else ""
+        r = db.rows(
+            f"""SELECT c.name, ROUND(SUM(i.total-i.paid)) due FROM invoices i
+                  JOIN customers c ON c.id=i.customer_id
+                 WHERE {company_where}i.status!='Paid'
+                 GROUP BY c.id ORDER BY due DESC LIMIT 10""",
+            (company_id,) if company_id is not None else (),
+        )
         return "**Top customers by outstanding**\n\n" + _table(["Customer", "Outstanding"],
                                                               [[x["name"], money(x["due"])] for x in r])
     if cmd in ("buying", "po", "purchase"):
-        r = db.rows("""SELECT po.code, s.name supplier, po.status, po.total FROM purchase_orders po
-                       LEFT JOIN suppliers s ON s.id=po.supplier_id
-                       WHERE po.status='Ordered' ORDER BY po.total DESC LIMIT 15""")
+        company_id = db.current_company_id()
+        company_where = "po.company_id=? AND " if company_id is not None else ""
+        r = db.rows(
+            f"""SELECT po.code, s.name supplier, po.status, po.total FROM purchase_orders po
+                  LEFT JOIN suppliers s ON s.id=po.supplier_id
+                 WHERE {company_where}po.status='Ordered'
+                 ORDER BY po.total DESC LIMIT 15""",
+            (company_id,) if company_id is not None else (),
+        )
         if not r:
             return "No purchase orders awaiting receipt. 🎉"
         return "**Purchase orders awaiting receipt**\n\n" + _table(

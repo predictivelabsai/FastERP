@@ -1,6 +1,8 @@
 """FastERP 3-pane layout — amber/operational palette, SSE AI rail."""
 from __future__ import annotations
 
+import os
+
 from fasthtml.common import (
     Div, H1, H3, H4, P, Span, A, Button, Form, Input, Title, Link, Script, Style, NotStr,
 )
@@ -200,7 +202,13 @@ def kpi_card(label, value, trend="", tone=""):
 
 def money(v):
     v = v or 0
-    return f"£{v/1_000_000:.2f}M" if v >= 1_000_000 else (f"£{v/1_000:.0f}k" if v >= 1_000 else f"£{v:,.0f}")
+    currency = os.getenv("FASTERP_DISPLAY_CURRENCY", "").strip().upper()
+    if not currency:
+        currency = os.getenv("FASTERP_COMPANY_CODE", "DEMO-GBP").rsplit("-", 1)[-1]
+    symbol = {"GBP": "£", "EUR": "€", "USD": "$"}.get(currency, f"{currency} ")
+    return (f"{symbol}{v/1_000_000:.2f}M" if v >= 1_000_000
+            else f"{symbol}{v/1_000:.0f}k" if v >= 1_000
+            else f"{symbol}{v:,.0f}")
 
 
 LAYOUT_JS = """

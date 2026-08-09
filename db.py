@@ -1,18 +1,16 @@
-"""FastERP data layer — SQLite, an Order-to-Cash + Inventory slice of ERPNext.
-
-ERPNext is ~527 doctypes; FastERP models the Selling + Stock vertical: items,
-customers, sales orders (+ line items), sales invoices (with AR aging), and
-stock movements. All synthetic.
-"""
+"""FastERP application facade: PostgreSQL runtime with SQLite demo fallback."""
 from __future__ import annotations
 
 import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 DB_PATH = os.getenv("FASTERP_DB") or str(Path(__file__).parent / "fasterp.sqlite")
+USE_POSTGRES = bool(os.getenv("DB_URL"))
 TODAY = date(2026, 6, 11)
 
 ORDER_STATUSES = ["Draft", "Confirmed", "Delivered", "Invoiced", "Closed", "Cancelled"]
@@ -22,8 +20,85 @@ ITEM_GROUPS = ["Raw Material", "Components", "Finished Goods", "Consumables", "P
 # estimated cost ratio for COGS posting (no per-item cost field in this slice)
 COGS_RATIO = 0.6
 
+_postgres_database = None
+
+
+def using_postgres() -> bool:
+    """Return whether the application is configured for the PostgreSQL runtime."""
+
+    return USE_POSTGRES
+
+
+def backend_label() -> str:
+    """Return a credential-free database identifier for diagnostics."""
+
+    return f"postgresql:{os.getenv('DB_SCHEMA', 'fast_erp')}" if USE_POSTGRES else DB_PATH
+
+
+def postgres_database():
+    """Return the process-wide PostgreSQL pool without exposing its connection URL."""
+
+    global _postgres_database
+    if _postgres_database is None:
+        from fasterp.config import DatabaseSettings
+        from fasterp.database import Database
+
+        _postgres_database = Database(DatabaseSettings.from_env())
+    return _postgres_database
+
+
+def _pg_sql(query: str) -> str:
+    """Translate the legacy facade's DB-API placeholders for PostgreSQL."""
+
+    return (
+        query.replace("%", "%%")
+        .replace("substr(invoice_date,1,7)", "to_char(invoice_date,'YYYY-MM')")
+        .replace("substr(expense_date,1,7)", "to_char(expense_date,'YYYY-MM')")
+        .replace("?", "%s")
+    )
+
+
+def current_company(connection=None) -> dict[str, Any]:
+    """Resolve the configured demo company, falling back to the first active one."""
+
+    if not USE_POSTGRES:
+        raise RuntimeError("Company context is only available in PostgreSQL mode")
+    code = os.getenv("FASTERP_COMPANY_CODE", "").strip()
+    query = "SELECT * FROM companies WHERE active=true"
+    params: tuple[Any, ...] = ()
+    if code:
+        query += " AND code=%s"
+        params = (code,)
+    query += " ORDER BY id LIMIT 1"
+    if connection is not None:
+        company = connection.execute(query, params).fetchone()
+    else:
+        company = postgres_database().one(query, params)
+    if not company:
+        hint = f" {code!r}" if code else ""
+        raise RuntimeError(f"No active FastERP company{hint}; run scripts/seed_postgres.py")
+    return company
+
+
+def current_company_id() -> int | None:
+    """Return the active PostgreSQL company id, or ``None`` for SQLite."""
+
+    return current_company()["id"] if USE_POSTGRES else None
+
+
+def _default_warehouse(connection, company_id: int) -> int:
+    row = connection.execute(
+        "SELECT id FROM warehouses WHERE company_id=%s AND active=true ORDER BY id LIMIT 1",
+        (company_id,),
+    ).fetchone()
+    if not row:
+        raise RuntimeError("The selected company has no active warehouse")
+    return row["id"]
+
 
 def connect():
+    if USE_POSTGRES:
+        raise RuntimeError("Use postgres_database().connection() in PostgreSQL mode")
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -31,6 +106,10 @@ def connect():
 
 @contextmanager
 def cursor():
+    if USE_POSTGRES:
+        with postgres_database().transaction() as conn:
+            yield conn
+        return
     conn = connect()
     try:
         yield conn
@@ -40,25 +119,57 @@ def cursor():
 
 
 def db_exists() -> bool:
+    if USE_POSTGRES:
+        try:
+            return bool(postgres_database().scalar(
+                "SELECT count(*) FROM schema_migrations WHERE version=%s",
+                ("0013_migration_master_idempotency",),
+            ))
+        except Exception:
+            return False
     p = Path(DB_PATH)
     return p.exists() and p.stat().st_size > 0
 
 
 def rows(sql, params=()):
+    if USE_POSTGRES:
+        return postgres_database().rows(_pg_sql(sql), params)
     with cursor() as conn:
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
 def one(sql, params=()):
+    if USE_POSTGRES:
+        return postgres_database().one(_pg_sql(sql), params)
     with cursor() as conn:
         r = conn.execute(sql, params).fetchone()
         return dict(r) if r else None
 
 
 def scalar(sql, params=()):
+    if USE_POSTGRES:
+        return postgres_database().scalar(_pg_sql(sql), params)
     with cursor() as conn:
         r = conn.execute(sql, params).fetchone()
         return r[0] if r else None
+
+
+def add_chat_message(thread_id: str, role: str, content: str) -> None:
+    """Persist a chat turn with backend-native timestamps and placeholders."""
+
+    if USE_POSTGRES:
+        with postgres_database().transaction() as conn:
+            conn.execute(
+                "INSERT INTO chat_messages(thread_id,role,content) VALUES (%s,%s,%s)",
+                (thread_id, role, content),
+            )
+        return
+    with cursor() as conn:
+        conn.execute(
+            "INSERT INTO chat_messages(thread_id,role,content,created) "
+            "VALUES(?,?,?,datetime('now'))",
+            (thread_id, role, content),
+        )
 
 
 SCHEMA = """
@@ -269,6 +380,15 @@ OPERATING_EXPENSES = {
 
 
 def init_schema():
+    if USE_POSTGRES:
+        required = "0013_migration_master_idempotency"
+        if not postgres_database().one(
+            "SELECT version FROM schema_migrations WHERE version=%s", (required,)
+        ):
+            raise RuntimeError(
+                "PostgreSQL schema is not current; run scripts/migrate_postgres.py"
+            )
+        return
     with cursor() as conn:
         conn.executescript(SCHEMA)
         columns = {r[1] for r in conn.execute("PRAGMA table_info(gl_entries)")}
@@ -284,6 +404,45 @@ def init_schema():
 
 
 def kpis() -> dict:
+    if USE_POSTGRES:
+        company_id = current_company_id()
+        paid = scalar(
+            "SELECT COALESCE(SUM(paid),0) FROM invoices WHERE company_id=?",
+            (company_id,),
+        ) or 0
+        receivable = scalar(
+            """SELECT COALESCE(SUM(total-paid),0) FROM invoices
+                 WHERE company_id=? AND status!='Paid'""",
+            (company_id,),
+        ) or 0
+        overdue = scalar(
+            """SELECT COALESCE(SUM(total-paid),0) FROM invoices
+                 WHERE company_id=? AND status='Overdue'""",
+            (company_id,),
+        ) or 0
+        open_q = ",".join("?" * len(OPEN_ORDER))
+        return {
+            "revenue": paid,
+            "receivable": receivable,
+            "overdue": overdue,
+            "inventory_value": scalar(
+                "SELECT COALESCE(SUM(stock_qty*rate),0) FROM items WHERE company_id=?",
+                (company_id,),
+            ) or 0,
+            "open_orders": scalar(
+                f"""SELECT COUNT(*) FROM sales_orders WHERE company_id=?
+                      AND status IN ({open_q})""",
+                (company_id, *OPEN_ORDER),
+            ) or 0,
+            "low_stock": scalar(
+                """SELECT COUNT(*) FROM items WHERE company_id=?
+                     AND stock_qty <= reorder_level""",
+                (company_id,),
+            ) or 0,
+            "customers": scalar(
+                "SELECT COUNT(*) FROM customers WHERE company_id=?", (company_id,)
+            ) or 0,
+        }
     paid = scalar("SELECT COALESCE(SUM(paid),0) FROM invoices") or 0
     receivable = scalar("SELECT COALESCE(SUM(total-paid),0) FROM invoices WHERE status!='Paid'") or 0
     overdue = scalar("SELECT COALESCE(SUM(total-paid),0) FROM invoices WHERE status='Overdue'") or 0
@@ -303,12 +462,26 @@ def kpis() -> dict:
 def orders_by_status():
     out = []
     for s in ORDER_STATUSES:
-        r = one("SELECT COUNT(*) n, COALESCE(SUM(total),0) v FROM sales_orders WHERE status=?", (s,))
+        if USE_POSTGRES:
+            r = one(
+                """SELECT COUNT(*) n, COALESCE(SUM(total),0) v
+                     FROM sales_orders WHERE company_id=? AND status=?""",
+                (current_company_id(), s),
+            )
+        else:
+            r = one("SELECT COUNT(*) n, COALESCE(SUM(total),0) v FROM sales_orders WHERE status=?", (s,))
         out.append({"status": s, "count": r["n"], "value": r["v"]})
     return out
 
 
 def sales_order(oid):
+    if USE_POSTGRES:
+        return one(
+            """SELECT so.*, c.name customer, c.territory FROM sales_orders so
+                 LEFT JOIN customers c ON c.id=so.customer_id
+                WHERE so.id=? AND so.company_id=?""",
+            (oid, current_company_id()),
+        )
     return one("""SELECT so.*, c.name customer, c.territory FROM sales_orders so
                   LEFT JOIN customers c ON c.id=so.customer_id WHERE so.id=?""", (oid,))
 
@@ -319,6 +492,11 @@ def order_items(oid):
 
 
 def invoice_for_order(oid):
+    if USE_POSTGRES:
+        return one(
+            "SELECT * FROM invoices WHERE order_id=? AND company_id=?",
+            (oid, current_company_id()),
+        )
     return one("SELECT * FROM invoices WHERE order_id=?", (oid,))
 
 
@@ -334,6 +512,11 @@ def confirm_order(oid) -> bool:
     o = sales_order(oid)
     if not o or o["status"] != "Draft":
         return False
+    if USE_POSTGRES:
+        from fasterp.sales import SalesService
+
+        SalesService(postgres_database()).post_order(oid, actor="FastERP UI")
+        return True
     with cursor() as conn:
         conn.execute("UPDATE sales_orders SET status='Confirmed' WHERE id=?", (oid,))
     return True
@@ -344,6 +527,24 @@ def deliver_order(oid) -> bool:
     o = sales_order(oid)
     if not o or o["status"] != "Confirmed":
         return False
+    if USE_POSTGRES:
+        from fasterp.sales import DeliveryLine, SalesService
+
+        pending = rows(
+            """SELECT id, qty-delivered_qty+returned_qty AS remaining
+                 FROM sales_order_items WHERE order_id=?
+                   AND qty-delivered_qty+returned_qty>0 ORDER BY line_number""",
+            (oid,),
+        )
+        if not pending:
+            return False
+        SalesService(postgres_database()).deliver(
+            oid,
+            delivery_date=date.today(),
+            lines=[DeliveryLine(row["id"], Decimal(str(row["remaining"]))) for row in pending],
+            actor="FastERP UI",
+        )
+        return True
     with cursor() as conn:
         for li in conn.execute("SELECT item_id, qty FROM sales_order_items WHERE order_id=?", (oid,)).fetchall():
             conn.execute("UPDATE items SET stock_qty = MAX(0, stock_qty - ?) WHERE id=?", (li["qty"], li["item_id"]))
@@ -358,6 +559,23 @@ def invoice_order(oid) -> int | None:
     o = sales_order(oid)
     if not o or o["status"] != "Delivered" or invoice_for_order(oid):
         return None
+    if USE_POSTGRES:
+        from fasterp.sales import InvoiceLine, SalesService
+
+        pending = rows(
+            """SELECT id, qty-invoiced_qty AS remaining
+                 FROM sales_order_items WHERE order_id=? AND qty-invoiced_qty>0
+                 ORDER BY line_number""",
+            (oid,),
+        )
+        if not pending:
+            return None
+        return SalesService(postgres_database()).invoice(
+            oid,
+            invoice_date=date.today(),
+            lines=[InvoiceLine(row["id"], Decimal(str(row["remaining"]))) for row in pending],
+            actor="FastERP UI",
+        )
     with cursor() as conn:
         n = (conn.execute("SELECT COALESCE(MAX(id),7000) FROM invoices").fetchone()[0]) + 1
         conn.execute(
@@ -375,10 +593,36 @@ def invoice_order(oid) -> int | None:
 
 
 def record_payment(invoice_id, amount: float) -> bool:
-    inv = one("SELECT * FROM invoices WHERE id=?", (invoice_id,))
+    if USE_POSTGRES:
+        inv = one(
+            "SELECT * FROM invoices WHERE id=? AND company_id=?",
+            (invoice_id, current_company_id()),
+        )
+    else:
+        inv = one("SELECT * FROM invoices WHERE id=?", (invoice_id,))
     if not inv or amount <= 0:
         return False
     pay = min(inv["total"] - inv["paid"], amount)
+    if USE_POSTGRES:
+        from fasterp.sales import PaymentAllocation, SalesService
+
+        base = Decimal(str(pay)) * Decimal(str(inv["exchange_rate"]))
+        SalesService(postgres_database()).receive_payment(
+            company_id=inv["company_id"],
+            customer_id=inv["customer_id"],
+            payment_date=date.today(),
+            currency=inv["currency"],
+            exchange_rate=Decimal(str(inv["exchange_rate"])),
+            payment_amount=Decimal(str(pay)),
+            allocations=[PaymentAllocation(
+                invoice_id=invoice_id,
+                payment_amount=Decimal(str(pay)),
+                invoice_amount=Decimal(str(pay)),
+                base_amount=base,
+            )],
+            actor="FastERP UI",
+        )
+        return True
     paid = inv["paid"] + pay
     # tolerate sub-£1 rounding so a "pay in full" (rounded) settles the invoice
     status = "Paid" if paid >= inv["total"] - 1.0 else "Partly Paid"
@@ -415,6 +659,22 @@ def post_gl(lines, ref: str, entry_date: str | None = None) -> bool:
 
 def trial_balance():
     """One row per account: total debits, credits and the signed balance."""
+    if USE_POSTGRES:
+        return rows(
+            """SELECT a.name AS account,
+                      COALESCE(SUM(g.debit),0) AS debit,
+                      COALESCE(SUM(g.credit),0) AS credit,
+                      CASE WHEN a.normal_side='Debit' THEN 'Dr' ELSE 'Cr' END AS normal,
+                      CASE WHEN a.normal_side='Debit'
+                           THEN COALESCE(SUM(g.debit-g.credit),0)
+                           ELSE COALESCE(SUM(g.credit-g.debit),0) END AS balance
+                 FROM accounts a
+                 LEFT JOIN gl_entries g ON g.account_id=a.id AND g.company_id=a.company_id
+                WHERE a.company_id=?
+                GROUP BY a.id,a.name,a.normal_side
+                ORDER BY a.code""",
+            (current_company_id(),),
+        )
     out = []
     for account, normal in ACCOUNTS.items():
         r = one("SELECT COALESCE(SUM(debit),0) d, COALESCE(SUM(credit),0) c "
@@ -428,6 +688,18 @@ def trial_balance():
 
 
 def gl_entries(account: str | None = None, limit: int = 200):
+    if USE_POSTGRES:
+        sql = """SELECT g.*,a.name AS account FROM gl_entries g
+                   JOIN accounts a ON a.id=g.account_id"""
+        if account:
+            return rows(
+                sql + " WHERE g.company_id=? AND a.name=? ORDER BY g.id DESC LIMIT ?",
+                (current_company_id(), account, limit),
+            )
+        return rows(
+            sql + " WHERE g.company_id=? ORDER BY g.id DESC LIMIT ?",
+            (current_company_id(), limit),
+        )
     if account:
         return rows("SELECT * FROM gl_entries WHERE account=? ORDER BY id DESC LIMIT ?",
                     (account, limit))
@@ -435,13 +707,30 @@ def gl_entries(account: str | None = None, limit: int = 200):
 
 
 def gl_totals():
-    r = one("SELECT COALESCE(SUM(debit),0) d, COALESCE(SUM(credit),0) c FROM gl_entries")
+    if USE_POSTGRES:
+        r = one(
+            """SELECT COALESCE(SUM(debit),0) d, COALESCE(SUM(credit),0) c
+                 FROM gl_entries WHERE company_id=?""",
+            (current_company_id(),),
+        )
+    else:
+        r = one("SELECT COALESCE(SUM(debit),0) d, COALESCE(SUM(credit),0) c FROM gl_entries")
     return {"debit": r["d"], "credit": r["c"], "balanced": abs(r["d"] - r["c"]) < 0.01}
 
 
 # --- buying (procure-to-stock) ----------------------------------------------
 
 def suppliers():
+    if USE_POSTGRES:
+        return rows(
+            """SELECT s.*,
+                       (SELECT COUNT(*) FROM purchase_orders po
+                         WHERE po.supplier_id=s.id AND po.company_id=s.company_id) po_count,
+                       (SELECT COALESCE(SUM(total),0) FROM purchase_orders po
+                         WHERE po.supplier_id=s.id AND po.company_id=s.company_id) spend
+                  FROM suppliers s WHERE s.company_id=? ORDER BY s.name""",
+            (current_company_id(),),
+        )
     return rows("""SELECT s.*,
                      (SELECT COUNT(*) FROM purchase_orders po WHERE po.supplier_id=s.id) po_count,
                      (SELECT COALESCE(SUM(total),0) FROM purchase_orders po WHERE po.supplier_id=s.id) spend
@@ -449,10 +738,41 @@ def suppliers():
 
 
 def supplier(sid):
+    if USE_POSTGRES:
+        return one(
+            "SELECT * FROM suppliers WHERE id=? AND company_id=?",
+            (sid, current_company_id()),
+        )
     return one("SELECT * FROM suppliers WHERE id=?", (sid,))
 
 
 def create_supplier(name: str, territory: str = "") -> int:
+    if USE_POSTGRES:
+        with postgres_database().transaction() as conn:
+            company = current_company(conn)
+            serial = conn.execute(
+                "SELECT COALESCE(max(id),0)+1 AS value FROM business_partners"
+            ).fetchone()["value"]
+            code = f"SUP-{serial:06d}"
+            partner = conn.execute(
+                """INSERT INTO business_partners
+                       (company_id,code,name,default_currency,active)
+                   VALUES (%s,%s,%s,%s,true) RETURNING id""",
+                (company["id"], code, name.strip(), company["local_currency"]),
+            ).fetchone()["id"]
+            conn.execute(
+                "INSERT INTO business_partner_roles(partner_id,role) VALUES (%s,'Supplier')",
+                (partner,),
+            )
+            return conn.execute(
+                """INSERT INTO suppliers
+                       (company_id,code,name,territory,currency,partner_id,created)
+                   VALUES (%s,%s,%s,%s,%s,%s,current_date) RETURNING id""",
+                (
+                    company["id"], code, name.strip(), territory.strip(),
+                    company["local_currency"], partner,
+                ),
+            ).fetchone()["id"]
     with cursor() as conn:
         conn.execute("INSERT INTO suppliers(name,territory,created) VALUES (?,?,date('now'))",
                      (name.strip(), territory.strip()))
@@ -465,12 +785,29 @@ PO_STATUSES = ["Draft", "Ordered", "Received", "Cancelled"]
 def purchase_orders(status: str | None = None):
     sql = """SELECT po.*, s.name supplier FROM purchase_orders po
              LEFT JOIN suppliers s ON s.id=po.supplier_id"""
+    if USE_POSTGRES:
+        if status:
+            return rows(
+                sql + " WHERE po.company_id=? AND po.status=? ORDER BY po.id DESC",
+                (current_company_id(), status),
+            )
+        return rows(
+            sql + " WHERE po.company_id=? ORDER BY po.id DESC",
+            (current_company_id(),),
+        )
     if status:
         return rows(sql + " WHERE po.status=? ORDER BY po.id DESC", (status,))
     return rows(sql + " ORDER BY po.id DESC")
 
 
 def purchase_order(pid):
+    if USE_POSTGRES:
+        return one(
+            """SELECT po.*, s.name supplier, s.territory FROM purchase_orders po
+                 LEFT JOIN suppliers s ON s.id=po.supplier_id
+                WHERE po.id=? AND po.company_id=?""",
+            (pid, current_company_id()),
+        )
     return one("""SELECT po.*, s.name supplier, s.territory FROM purchase_orders po
                   LEFT JOIN suppliers s ON s.id=po.supplier_id WHERE po.id=?""", (pid,))
 
@@ -486,6 +823,37 @@ def create_po(supplier_id, lines, status: str = "Ordered") -> int | None:
     if not supplier_id or not lines:
         return None
     total = sum(q * r for _, q, r in lines)
+    if USE_POSTGRES:
+        from fasterp.purchasing import PurchaseOrderLine, PurchasingService
+
+        with postgres_database().connection() as conn:
+            supplier_row = conn.execute(
+                """SELECT s.company_id,c.local_currency FROM suppliers s
+                     JOIN companies c ON c.id=s.company_id
+                    WHERE s.id=%s AND s.company_id=%s""",
+                (supplier_id, current_company(conn)["id"]),
+            ).fetchone()
+            if not supplier_row:
+                return None
+            warehouse_id = _default_warehouse(conn, supplier_row["company_id"])
+        service = PurchasingService(postgres_database())
+        pid = service.create_order(
+            company_id=supplier_row["company_id"],
+            supplier_id=supplier_id,
+            order_date=date.today(),
+            currency=supplier_row["local_currency"],
+            exchange_rate=Decimal("1"),
+            lines=[PurchaseOrderLine(
+                item_id=item_id,
+                warehouse_id=warehouse_id,
+                quantity=Decimal(str(qty)),
+                unit_price=Decimal(str(rate)),
+            ) for item_id, qty, rate in lines],
+            actor="FastERP UI",
+        )
+        if status == "Ordered":
+            service.post_order(pid, actor="FastERP UI")
+        return pid
     with cursor() as conn:
         n = (conn.execute("SELECT COALESCE(MAX(id),6000) FROM purchase_orders").fetchone()[0]) + 1
         conn.execute(
@@ -505,6 +873,24 @@ def receive_po(pid) -> bool:
     po = purchase_order(pid)
     if not po or po["status"] != "Ordered":
         return False
+    if USE_POSTGRES:
+        from fasterp.purchasing import PurchasingService, ReceiptLine
+
+        pending = rows(
+            """SELECT id,qty-received_qty+returned_qty AS remaining
+                 FROM purchase_order_items WHERE po_id=?
+                   AND qty-received_qty+returned_qty>0 ORDER BY line_number""",
+            (pid,),
+        )
+        if not pending:
+            return False
+        PurchasingService(postgres_database()).receive(
+            pid,
+            receipt_date=date.today(),
+            lines=[ReceiptLine(row["id"], Decimal(str(row["remaining"]))) for row in pending],
+            actor="FastERP UI",
+        )
+        return True
     with cursor() as conn:
         for li in conn.execute("SELECT item_id, qty FROM purchase_order_items WHERE po_id=?",
                                (pid,)).fetchall():
@@ -536,6 +922,16 @@ def accounting_kpis():
 
 
 def account_rows():
+    if USE_POSTGRES:
+        return rows(
+            """SELECT a.*,COALESCE(SUM(g.debit),0) debit,
+                      COALESCE(SUM(g.credit),0) credit
+                 FROM accounts a
+                 LEFT JOIN gl_entries g ON g.account_id=a.id AND g.company_id=a.company_id
+                WHERE a.company_id=?
+                GROUP BY a.id ORDER BY a.code""",
+            (current_company_id(),),
+        )
     return rows("""SELECT a.*, COALESCE(SUM(g.debit),0) debit,
                           COALESCE(SUM(g.credit),0) credit
                    FROM accounts a LEFT JOIN gl_entries g ON g.account=a.name
@@ -543,6 +939,17 @@ def account_rows():
 
 
 def expense_rows(limit=200):
+    if USE_POSTGRES:
+        return rows(
+            """SELECT e.*, s.name supplier, b.name business_unit, p.name project
+                 FROM expenses e
+                 LEFT JOIN suppliers s ON s.id=e.supplier_id
+                 LEFT JOIN business_units b ON b.id=e.business_unit_id
+                 LEFT JOIN projects p ON p.id=e.project_id
+                WHERE e.company_id=?
+                ORDER BY e.expense_date DESC, e.id DESC LIMIT ?""",
+            (current_company_id(), limit),
+        )
     return rows("""SELECT e.*, s.name supplier, b.name business_unit, p.name project
                    FROM expenses e
                    LEFT JOIN suppliers s ON s.id=e.supplier_id
@@ -551,13 +958,143 @@ def expense_rows(limit=200):
                    ORDER BY e.expense_date DESC, e.id DESC LIMIT ?""", (limit,))
 
 
+def currency_rows():
+    if USE_POSTGRES:
+        company = current_company()
+        return rows(
+            """SELECT currency.*,
+                      CASE WHEN currency.code=? THEN 1
+                           ELSE COALESCE((SELECT rate FROM exchange_rates rate
+                                          WHERE rate.company_id=?
+                                            AND rate.from_currency=currency.code
+                                            AND rate.to_currency=?
+                                          ORDER BY rate.rate_date DESC LIMIT 1),1)
+                      END AS rate_to_local,
+                      ? AS local_currency
+                 FROM currencies currency ORDER BY currency.code""",
+            (
+                company["local_currency"], company["id"],
+                company["local_currency"], company["local_currency"],
+            ),
+        )
+    return [
+        {**row, "rate_to_local": row["rate_to_gbp"], "local_currency": "GBP"}
+        for row in rows("SELECT * FROM currencies ORDER BY code")
+    ]
+
+
+def business_unit_rows(order_by="name"):
+    """Return business units for the selected company."""
+
+    order = "code" if order_by == "code" else "name"
+    if USE_POSTGRES:
+        return rows(
+            f"SELECT * FROM business_units WHERE company_id=? ORDER BY {order}",
+            (current_company_id(),),
+        )
+    return rows(f"SELECT * FROM business_units ORDER BY {order}")
+
+
+def project_dimension_rows():
+    """Return project choices for the selected company."""
+
+    if USE_POSTGRES:
+        return rows(
+            "SELECT * FROM projects WHERE company_id=? ORDER BY name",
+            (current_company_id(),),
+        )
+    return rows("SELECT * FROM projects ORDER BY name")
+
+
+def tax_code_rows(with_label=False):
+    """Return tax codes for the selected company."""
+
+    columns = "*, code || ' · ' || rate || '%' label" if with_label else "*"
+    if USE_POSTGRES:
+        return rows(
+            f"SELECT {columns} FROM tax_codes WHERE company_id=? ORDER BY rate",
+            (current_company_id(),),
+        )
+    return rows(f"SELECT {columns} FROM tax_codes ORDER BY rate")
+
+
+def attachment_rows():
+    if USE_POSTGRES:
+        return rows(
+            """SELECT *,created_at AS created FROM attachments
+                WHERE company_id=? ORDER BY created_at DESC""",
+            (current_company_id(),),
+        )
+    return rows("SELECT * FROM attachments ORDER BY created DESC")
+
+
 def create_expense(supplier_id, category, description, net_amount, tax_code_id,
                    currency="GBP", business_unit_id=None, project_id=None, note=""):
     net = round(float(net_amount), 2)
-    tax = one("SELECT * FROM tax_codes WHERE id=?", (tax_code_id,)) if tax_code_id else None
+    if tax_code_id and USE_POSTGRES:
+        tax = one(
+            "SELECT * FROM tax_codes WHERE id=? AND company_id=?",
+            (tax_code_id, current_company_id()),
+        )
+    else:
+        tax = one("SELECT * FROM tax_codes WHERE id=?", (tax_code_id,)) if tax_code_id else None
     tax_amount = round(net * (tax["rate"] if tax else 0) / 100, 2)
-    fx = one("SELECT rate_to_gbp FROM currencies WHERE code=?", (currency,)) or {"rate_to_gbp": 1}
     total = net + tax_amount
+    if USE_POSTGRES:
+        from fasterp.accounting import AccountingService, PostingLine, amount
+        from fasterp.documents import next_code
+
+        with postgres_database().transaction() as conn:
+            company = current_company(conn)
+            rate_row = conn.execute(
+                """SELECT rate FROM exchange_rates
+                    WHERE company_id=%s AND from_currency=%s AND to_currency=%s
+                    ORDER BY rate_date DESC LIMIT 1""",
+                (company["id"], currency, company["local_currency"]),
+            ).fetchone()
+            fx_rate = Decimal("1") if currency == company["local_currency"] else Decimal(
+                str(rate_row["rate"] if rate_row else 1)
+            )
+            code = next_code(conn, company["id"], "Expense", prefix="EXP-")
+            expense_id = conn.execute(
+                """INSERT INTO expenses
+                       (company_id,code,expense_date,supplier_id,category,description,
+                        net_amount,tax_amount,total,currency,exchange_rate,
+                        business_unit_id,project_id,status,note)
+                   VALUES (%s,%s,current_date,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'Posted',%s)
+                   RETURNING id""",
+                (
+                    company["id"], code, supplier_id or None, category, description,
+                    net, tax_amount, total, currency, fx_rate,
+                    business_unit_id or None, project_id or None, note,
+                ),
+            ).fetchone()["id"]
+            accounts = {
+                row["name"]: row["id"]
+                for row in conn.execute(
+                    "SELECT id,name FROM accounts WHERE company_id=%s",
+                    (company["id"],),
+                ).fetchall()
+            }
+            settings = conn.execute(
+                "SELECT * FROM company_accounting_settings WHERE company_id=%s",
+                (company["id"],),
+            ).fetchone()
+            expense_account = accounts.get(category) or settings["purchase_account_id"]
+            payable = settings["payable_account_id"]
+            base_net = amount(Decimal(str(net)) * fx_rate)
+            base_tax = amount(Decimal(str(tax_amount)) * fx_rate)
+            posting = [PostingLine(expense_account, debit=base_net)]
+            if base_tax:
+                posting.append(PostingLine(settings["purchase_tax_account_id"], debit=base_tax))
+            posting.append(PostingLine(payable, credit=base_net + base_tax))
+            AccountingService(postgres_database()).post_voucher(
+                company_id=company["id"], voucher_type="Expense", voucher_id=expense_id,
+                voucher_code=code, posting_date=date.today(), lines=posting,
+                actor="FastERP UI", connection=conn,
+            )
+            return expense_id
+    fx = one("SELECT rate_to_gbp FROM currencies WHERE code=?", (currency,)) or {"rate_to_gbp": 1}
     with cursor() as conn:
         n = (conn.execute("SELECT COALESCE(MAX(id),0) FROM expenses").fetchone()[0]) + 8001
         code = f"EXP-{n}"
@@ -590,6 +1127,50 @@ def create_journal(entry_date, memo, lines):
              for a, d, c, u, p in lines if a and (float(d or 0) or float(c or 0))]
     if len(clean) < 2 or abs(sum(x[1] for x in clean) - sum(x[2] for x in clean)) >= 0.01:
         return None
+    if USE_POSTGRES:
+        from fasterp.accounting import AccountingService, PostingLine
+        from fasterp.documents import next_code
+
+        posting_date = date.fromisoformat(entry_date) if entry_date else date.today()
+        with postgres_database().transaction() as conn:
+            company = current_company(conn)
+            account_rows_by_name = {
+                row["name"]: row["id"]
+                for row in conn.execute(
+                    "SELECT id,name FROM accounts WHERE company_id=%s",
+                    (company["id"],),
+                ).fetchall()
+            }
+            if any(name not in account_rows_by_name for name, *_ in clean):
+                return None
+            code = next_code(conn, company["id"], "Journal Entry", prefix="JE-")
+            jid = conn.execute(
+                """INSERT INTO journal_entries
+                       (company_id,code,entry_date,memo,status,transaction_currency,
+                        transaction_exchange_rate)
+                   VALUES (%s,%s,%s,%s,'Posted',%s,1) RETURNING id""",
+                (company["id"], code, posting_date, memo, company["local_currency"]),
+            ).fetchone()["id"]
+            posting = []
+            for line_number, (name, debit, credit, unit, project) in enumerate(clean, 1):
+                account_id = account_rows_by_name[name]
+                conn.execute(
+                    """INSERT INTO journal_lines
+                           (journal_id,line_number,account_id,debit,credit,
+                            business_unit_id,project_id,memo)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (jid, line_number, account_id, debit, credit, unit, project, memo),
+                )
+                posting.append(PostingLine(
+                    account_id, debit=Decimal(str(debit)), credit=Decimal(str(credit)),
+                    business_unit_id=unit, project_id=project, memo=memo,
+                ))
+            AccountingService(postgres_database()).post_voucher(
+                company_id=company["id"], voucher_type="Journal Entry", voucher_id=jid,
+                voucher_code=code, posting_date=posting_date, lines=posting,
+                actor="FastERP UI", connection=conn,
+            )
+            return jid
     with cursor() as conn:
         n = (conn.execute("SELECT COALESCE(MAX(id),0) FROM journal_entries").fetchone()[0]) + 9001
         code = f"JE-{n}"
@@ -609,12 +1190,38 @@ def create_journal(entry_date, memo, lines):
 
 
 def journal_rows(limit=100):
+    if USE_POSTGRES:
+        return rows(
+            """SELECT j.*, COUNT(l.id) lines, COALESCE(SUM(l.debit),0) total
+                 FROM journal_entries j LEFT JOIN journal_lines l ON l.journal_id=j.id
+                WHERE j.company_id=?
+                GROUP BY j.id ORDER BY j.entry_date DESC, j.id DESC LIMIT ?""",
+            (current_company_id(), limit),
+        )
     return rows("""SELECT j.*, COUNT(l.id) lines, SUM(l.debit) total
                    FROM journal_entries j LEFT JOIN journal_lines l ON l.journal_id=j.id
                    GROUP BY j.id ORDER BY j.entry_date DESC, j.id DESC LIMIT ?""", (limit,))
 
 
 def project_rows():
+    if USE_POSTGRES:
+        return rows(
+            """SELECT p.*,c.name customer,b.name business_unit,
+                      COALESCE(SUM(CASE WHEN a.name IN
+                        ('Sales Revenue','Service Revenue','Other Income')
+                        THEN g.credit-g.debit ELSE 0 END),0) revenue,
+                      COALESCE(SUM(CASE WHEN a.name LIKE '%Expense'
+                        OR a.name IN ('Professional Fees','Cost of Goods Sold')
+                        THEN g.debit-g.credit ELSE 0 END),0) costs
+                 FROM projects p
+                 LEFT JOIN customers c ON c.id=p.customer_id
+                 LEFT JOIN business_units b ON b.id=p.business_unit_id
+                 LEFT JOIN gl_entries g ON g.project_id=p.id
+                 LEFT JOIN accounts a ON a.id=g.account_id
+                WHERE p.company_id=?
+                GROUP BY p.id,c.name,b.name ORDER BY p.status,p.name"""
+            , (current_company_id(),)
+        )
     return rows("""SELECT p.*, c.name customer, b.name business_unit,
                      COALESCE(SUM(CASE WHEN g.account IN
                        ('Sales Revenue','Service Revenue','Other Income') THEN g.credit-g.debit ELSE 0 END),0) revenue,
@@ -637,8 +1244,19 @@ def profit_and_loss(unit_id=None, project_id=None):
         where.append("project_id=?")
         params.append(project_id)
     clause = (" WHERE " + " AND ".join(where)) if where else ""
-    data = rows("""SELECT account, SUM(debit) debit, SUM(credit) credit
-                   FROM gl_entries""" + clause + " GROUP BY account", tuple(params))
+    if USE_POSTGRES:
+        where.insert(0, "g.company_id=?")
+        params.insert(0, current_company_id())
+        clause = " WHERE " + " AND ".join(where)
+        prefix = """SELECT a.name account,SUM(g.debit) debit,SUM(g.credit) credit
+                      FROM gl_entries g JOIN accounts a ON a.id=g.account_id"""
+        pg_clause = clause.replace("business_unit_id", "g.business_unit_id").replace(
+            "project_id", "g.project_id"
+        )
+        data = rows(prefix + pg_clause + " GROUP BY a.name", tuple(params))
+    else:
+        data = rows("""SELECT account, SUM(debit) debit, SUM(credit) credit
+                       FROM gl_entries""" + clause + " GROUP BY account", tuple(params))
     result = []
     for r in data:
         if r["account"] in ("Sales Revenue", "Service Revenue", "Other Income"):
@@ -669,6 +1287,14 @@ def balance_sheet():
 
 
 def tax_summary():
+    if USE_POSTGRES:
+        return rows(
+            """SELECT to_char(expense_date,'YYYY-MM') period,
+                      SUM(net_amount) taxable,SUM(tax_amount) input_tax
+                 FROM expenses WHERE company_id=?
+                GROUP BY period ORDER BY period DESC""",
+            (current_company_id(),),
+        )
     return rows("""SELECT substr(expense_date,1,7) period, SUM(net_amount) taxable,
                           SUM(tax_amount) input_tax
                    FROM expenses GROUP BY period ORDER BY period DESC""")

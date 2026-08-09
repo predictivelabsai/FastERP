@@ -29,20 +29,36 @@ def dashboard():
                   Div(f"{money(o['value'])} · {o['count']}", cls="v"), cls="funnel-row") for o in obs]
 
     # monthly sales (invoiced)
-    monthly = db.rows("""SELECT substr(invoice_date,1,7) m, ROUND(SUM(total)) v FROM invoices
-                         GROUP BY m ORDER BY m DESC LIMIT 6""")
+    company_id = db.current_company_id()
+    if company_id is not None:
+        monthly = db.rows(
+            """SELECT substr(invoice_date,1,7) m, ROUND(SUM(total)) v FROM invoices
+                WHERE company_id=? GROUP BY m ORDER BY m DESC LIMIT 6""",
+            (company_id,),
+        )
+    else:
+        monthly = db.rows("""SELECT substr(invoice_date,1,7) m, ROUND(SUM(total)) v FROM invoices
+                             GROUP BY m ORDER BY m DESC LIMIT 6""")
     mtbl = Table(Thead(Tr(Th("Month"), Th("Invoiced", cls="num"))),
                  Tbody(*[Tr(Td(r["m"]), Td(money(r["v"]), cls="num")) for r in reversed(monthly)]), cls="tbl")
 
     # AR aging
-    aging = db.rows("""SELECT status, ROUND(SUM(total-paid)) due, COUNT(*) n FROM invoices
-                       WHERE status!='Paid' GROUP BY status""")
+    aging_where = "company_id=? AND status!='Paid'" if company_id is not None else "status!='Paid'"
+    aging = db.rows(
+        f"""SELECT status, ROUND(SUM(total-paid)) due, COUNT(*) n FROM invoices
+             WHERE {aging_where} GROUP BY status""",
+        (company_id,) if company_id is not None else (),
+    )
     atbl = Table(Thead(Tr(Th("Status"), Th("Invoices", cls="num"), Th("Outstanding", cls="num"))),
                  Tbody(*[Tr(Td(_pill(r["status"])), Td(str(r["n"]), cls="num"), Td(money(r["due"]), cls="num"))
                          for r in aging] or [Tr(Td("All settled 🎉", colspan="3"))]), cls="tbl")
 
-    low = db.rows("""SELECT name, code, stock_qty, reorder_level, uom FROM items
-                     WHERE stock_qty <= reorder_level ORDER BY (stock_qty-reorder_level) LIMIT 8""")
+    low_where = "company_id=? AND stock_qty <= reorder_level" if company_id is not None else "stock_qty <= reorder_level"
+    low = db.rows(
+        f"""SELECT name, code, stock_qty, reorder_level, uom FROM items
+             WHERE {low_where} ORDER BY (stock_qty-reorder_level) LIMIT 8""",
+        (company_id,) if company_id is not None else (),
+    )
     ltbl = Table(Thead(Tr(Th("Item"), Th("In stock", cls="num"), Th("Reorder at", cls="num"))),
                  Tbody(*[Tr(Td(f"{r['name']}"), Td(f"{r['stock_qty']:.0f} {r['uom']}", cls="num"),
                             Td(f"{r['reorder_level']:.0f}", cls="num")) for r in low]
@@ -66,7 +82,8 @@ def dashboard():
 def orders_list(status="All", q=""):
     seg = Div(*[A(s, href=f"/orders?status={s}", cls="" + ("active" if status == s else ""))
                 for s in ["All"] + db.ORDER_STATUSES], cls="seg")
-    where, params = [], []
+    company_id = db.current_company_id()
+    where, params = (["so.company_id=?"], [company_id]) if company_id is not None else ([], [])
     if status != "All":
         where.append("so.status=?")
         params.append(status)
@@ -163,11 +180,19 @@ def order_detail(oid):
 def invoices_list(status="All"):
     seg = Div(*[A(s, href=f"/invoices?status={s}", cls="" + ("active" if status == s else ""))
                 for s in ["All"] + db.INVOICE_STATUSES], cls="seg")
-    clause, params = ("", ()) if status == "All" else ("WHERE inv.status=?", (status,))
+    company_id = db.current_company_id()
+    where, params = [], []
+    if company_id is not None:
+        where.append("inv.company_id=?")
+        params.append(company_id)
+    if status != "All":
+        where.append("inv.status=?")
+        params.append(status)
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
     invs = db.rows(f"""SELECT inv.*, c.name customer, so.code order_code FROM invoices inv
                        LEFT JOIN customers c ON c.id=inv.customer_id
                        LEFT JOIN sales_orders so ON so.id=inv.order_id {clause}
-                       ORDER BY inv.due_date LIMIT 200""", params)
+                       ORDER BY inv.due_date LIMIT 200""", tuple(params))
     total_due = sum(i["total"] - i["paid"] for i in invs if i["status"] != "Paid")
     tbl = Table(Thead(Tr(Th("Invoice"), Th("Customer"), Th("Invoiced"), Th("Due"), Th("Total", cls="num"),
                          Th("Outstanding", cls="num"), Th("Status"))),
@@ -184,7 +209,8 @@ def invoices_list(status="All"):
 def items_list(group="All", q=""):
     seg = Div(*[A(s, href=f"/items?group={s}", cls="" + ("active" if group == s else ""))
                 for s in ["All"] + db.ITEM_GROUPS], cls="seg")
-    where, params = [], []
+    company_id = db.current_company_id()
+    where, params = (["company_id=?"], [company_id]) if company_id is not None else ([], [])
     if group != "All":
         where.append("item_group=?")
         params.append(group)
@@ -211,11 +237,17 @@ def items_list(group="All", q=""):
 
 
 def customers_list():
-    custs = db.rows("""SELECT c.*,
-                       (SELECT COUNT(*) FROM sales_orders so WHERE so.customer_id=c.id) orders,
-                       (SELECT COALESCE(SUM(total-paid),0) FROM invoices
-                          WHERE customer_id=c.id AND status!='Paid') outstanding
-                       FROM customers c ORDER BY outstanding DESC, c.name""")
+    company_id = db.current_company_id()
+    company_clause = "WHERE c.company_id=?" if company_id is not None else ""
+    custs = db.rows(
+        f"""SELECT c.*,
+                    (SELECT COUNT(*) FROM sales_orders so WHERE so.customer_id=c.id) orders,
+                    (SELECT COALESCE(SUM(total-paid),0) FROM invoices
+                       WHERE customer_id=c.id AND status!='Paid') outstanding
+               FROM customers c {company_clause}
+              ORDER BY outstanding DESC, c.name""",
+        (company_id,) if company_id is not None else (),
+    )
     tbl = Table(Thead(Tr(Th("Customer"), Th("Territory"), Th("Credit limit", cls="num"),
                          Th("Orders", cls="num"), Th("Outstanding", cls="num"))),
                 Tbody(*[Tr(Td(Strong(c["name"])), Td(c["territory"] or "—"),
@@ -305,7 +337,14 @@ def po_detail(pid):
 
 def po_new_form():
     sups = db.suppliers()
-    items = db.rows("SELECT id, code, name, rate FROM items ORDER BY name")
+    company_id = db.current_company_id()
+    if company_id is not None:
+        items = db.rows(
+            "SELECT id, code, name, rate FROM items WHERE company_id=? ORDER BY name",
+            (company_id,),
+        )
+    else:
+        items = db.rows("SELECT id, code, name, rate FROM items ORDER BY name")
     # five blank line rows; each is item-select + qty + rate
     item_opts = "".join(f'<option value="{i["id"]}" data-rate="{i["rate"]:.2f}">{i["code"]} · {i["name"]}</option>'
                         for i in items)

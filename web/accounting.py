@@ -94,9 +94,9 @@ def expenses():
 
 def expense_form():
     suppliers = db.suppliers()
-    units = db.rows("SELECT * FROM business_units ORDER BY name")
-    projects = db.rows("SELECT * FROM projects ORDER BY name")
-    taxes = db.rows("SELECT *, code || ' · ' || rate || '%' label FROM tax_codes ORDER BY rate")
+    units = db.business_unit_rows()
+    projects = db.project_dimension_rows()
+    taxes = db.tax_code_rows(with_label=True)
     currencies = db.rows("SELECT *, code || ' · ' || name label FROM currencies ORDER BY code")
     categories = [{"name": n} for n in db.OPERATING_EXPENSES]
     return (
@@ -140,8 +140,8 @@ def journals():
 
 def journal_form(error=""):
     accounts = [{"name": n} for n in db.ACCOUNTS]
-    units = db.rows("SELECT * FROM business_units ORDER BY name")
-    projects = db.rows("SELECT * FROM projects ORDER BY name")
+    units = db.business_unit_rows()
+    projects = db.project_dimension_rows()
     line_blocks = []
     for n in range(4):
         line_blocks.append(Div(
@@ -223,19 +223,20 @@ def reports(report="pnl"):
                                Tr(Td(Strong("Net income"), colspan="2"),
                                   Td(Strong(money(income-costs)), cls="num"))), cls="tbl"), cls="card")
         title = "Profit & Loss"
-    return _title(title, "Accrual-basis report in GBP from posted transactions."), tabs, body
+    currency = db.current_company()["local_currency"] if db.using_postgres() else "GBP"
+    return _title(title, f"Accrual-basis report in {currency} from posted transactions."), tabs, body
 
 
 def settings():
-    currencies = db.rows("SELECT * FROM currencies ORDER BY code")
-    units = db.rows("SELECT * FROM business_units ORDER BY code")
-    taxes = db.rows("SELECT * FROM tax_codes ORDER BY rate")
-    attachments = db.rows("SELECT * FROM attachments ORDER BY created DESC")
+    currencies = db.currency_rows()
+    units = db.business_unit_rows(order_by="code")
+    taxes = db.tax_code_rows()
+    attachments = db.attachment_rows()
     return (
         _title("Accounting Setup", "Currencies, tax codes, business units and seeded attachments."),
         Div(
             Div(H3("Currencies"), *[Div(Strong(c["code"]), Span(c["name"]),
-                                         Span(f"1 {c['code']} = {c['rate_to_gbp']:.2f} GBP"), cls="setup-row")
+                                         Span(f"1 {c['code']} = {c['rate_to_local']:.2f} {c['local_currency']}"), cls="setup-row")
                                       for c in currencies], cls="card"),
             Div(H3("Business units"), *[Div(Strong(u["code"]), Span(u["name"]), Span(u["region"]),
                                             cls="setup-row") for u in units], cls="card"),
