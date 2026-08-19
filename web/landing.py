@@ -37,7 +37,7 @@ CSS = """
 .lp-band{background:var(--tint);border-block:1px solid color-mix(in srgb,var(--accent) 15%,white)} .lp-grid{max-width:1180px;margin:auto;padding:64px 24px;display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
 .lp-card{background:rgba(255,255,255,.82);border:1px solid color-mix(in srgb,var(--accent) 15%,white);border-radius:20px;padding:26px} .lp-num{color:var(--accent);font-size:12px;font-weight:750} .lp-card h2{font-size:20px;margin:24px 0 8px} .lp-card p{color:var(--muted);line-height:1.6;margin:0}
 .lp-partners{max-width:1180px;margin:auto;padding:72px 24px;scroll-margin-top:80px} .lp-partners-head{max-width:720px} .lp-partners-head h2{font-size:32px;letter-spacing:-.03em;margin:10px 0 12px} .lp-partners-head p{color:var(--muted);line-height:1.65;margin:0}
-.lp-partner-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin-top:32px} .lp-partner{min-width:0;color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:18px;padding:20px;background:#fff;transition:transform .18s,border-color .18s,box-shadow .18s} .lp-partner:hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--accent) 40%,white);box-shadow:0 14px 34px rgba(17,24,39,.08)}
+.lp-partner-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:32px} .lp-partner{min-width:0;color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:18px;padding:20px;background:#fff;transition:transform .18s,border-color .18s,box-shadow .18s} .lp-partner:hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--accent) 40%,white);box-shadow:0 14px 34px rgba(17,24,39,.08)}
 .lp-partner-top{display:flex;align-items:center;justify-content:space-between;gap:12px} .lp-partner-logo{width:46px;height:46px;object-fit:contain} .lp-partner-type{color:var(--accent);font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.1em;text-align:right} .lp-partner h3{font-size:18px;margin:18px 0 8px} .lp-partner p{color:var(--muted);font-size:13px;line-height:1.55;margin:0} .lp-partner-visit{display:block;color:var(--accent);font-size:12px;font-weight:700;margin-top:16px}
 .lp-developers{max-width:1180px;margin:auto;padding:72px 24px;display:grid;grid-template-columns:1fr auto;align-items:center;gap:32px} .lp-developers h2{font-size:32px;letter-spacing:-.03em;margin:8px 0 12px} .lp-developers p{color:var(--muted);line-height:1.65;max-width:680px;margin:0}
 .lp-footer{max-width:1180px;margin:auto;padding:30px 24px 48px;color:var(--muted);font-size:13px;display:flex;justify-content:space-between;gap:20px}
@@ -105,6 +105,7 @@ def landing_page():
             ),
             Footer(Span("FastERP is part of the open-source FastSME suite."),
                    A("View all products", href="https://fastsme.com/products", style="color:var(--accent)"),
+                   A("View on GitHub ↗", href="https://github.com/predictivelabsai/FastERP", target="_blank", rel="noopener noreferrer", style="color:var(--accent)"),
                    cls="lp-footer"),
             auth_modal("FastERP"),
             Script(AUTH_JS),
