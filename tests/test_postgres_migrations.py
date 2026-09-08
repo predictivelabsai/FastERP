@@ -10,7 +10,7 @@ from scripts.migrate_postgres import migrations, render, validate_schema
 def test_migration_series_is_contiguous_and_records_its_version():
     found = migrations()
     assert [migration.version[:4] for migration in found] == [
-        f"{number:04d}" for number in range(1, 14)
+        f"{number:04d}" for number in range(1, 15)
     ]
     for migration in found:
         assert migration.version in migration.source

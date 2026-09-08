@@ -233,6 +233,19 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     content       TEXT NOT NULL,
     created       TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS commerce_order_ingress (
+    id              INTEGER PRIMARY KEY,
+    company_id      INTEGER,
+    source          TEXT NOT NULL,
+    source_id       TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    payload_json    TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'Received',
+    erp_order_id    INTEGER,
+    created         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (company_id, source, source_id),
+    UNIQUE (company_id, idempotency_key)
+);
 CREATE TABLE IF NOT EXISTS suppliers (
     id            INTEGER PRIMARY KEY,
     name          TEXT NOT NULL,
@@ -381,7 +394,7 @@ OPERATING_EXPENSES = {
 
 def init_schema():
     if USE_POSTGRES:
-        required = "0013_migration_master_idempotency"
+        required = "0014_fastshop_commerce_ingress"
         if not postgres_database().one(
             "SELECT version FROM schema_migrations WHERE version=%s", (required,)
         ):

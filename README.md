@@ -94,6 +94,9 @@ docker compose up --build      # http://localhost:5011
 - **Integration API** (`/api`) — company-scoped FastAPI resources for accounts,
   invoices, expenses, projects, reports and webhook payloads. Swagger includes
   example schemas; invoice POSTs validate previews without posting.
+- **FastShop connector** (`POST /api/v1/commerce/orders`) — token-gated,
+  company-scoped and idempotent order ingress. Commerce orders are staged for
+  mapping and reconciliation before they become ERP sales orders.
 - **AI Assistant** (right rail) — ops/finance Q&A grounded in a live snapshot;
   slash-commands `/sales`, `/ar`, `/stock`, `/top`, `/buying` and `/gl` work
   with **no API key**.
