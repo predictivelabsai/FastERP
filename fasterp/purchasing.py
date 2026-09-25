@@ -11,6 +11,7 @@ from .database import Database
 from .documents import audit, next_code, require_state
 from .errors import AllocationError, DocumentStateError, DomainError
 from .inventory import InventoryLine, InventoryService, number
+from .warehouse import StockAllocation
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,8 @@ class ReceiptLine:
     accepted_quantity: Decimal
     rejected_quantity: Decimal = ZERO
     rejected_warehouse_id: int | None = None
+    accepted_allocations: tuple[StockAllocation, ...] = ()
+    rejected_allocations: tuple[StockAllocation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,7 @@ class ReceiptReturnLine:
     receipt_line_id: int
     quantity: Decimal
     rejected: bool = False
+    allocations: tuple[StockAllocation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -245,6 +249,7 @@ class PurchasingService:
                                 source["item_id"], source["warehouse_id"], accepted,
                                 base_unit_cost, source_line_type="Purchase Receipt Item",
                                 source_line_id=receipt_line_id,
+                                allocations=request.accepted_allocations,
                             )
                         )
                     if rejected > ZERO:
@@ -254,6 +259,7 @@ class PurchasingService:
                                 rejected, base_unit_cost,
                                 source_line_type="Purchase Receipt Rejected Item",
                                 source_line_id=receipt_line_id,
+                                allocations=request.rejected_allocations,
                             )
                         )
             if inventory_lines:
@@ -696,14 +702,77 @@ class PurchasingService:
                     )
                 connection.execute(
                     "UPDATE purchase_order_items SET returned_qty=returned_qty+%s WHERE id=%s",
-                    (qty, source["purchase_order_item_id"]),
-                )
+                        (qty, source["purchase_order_item_id"]),
+                    )
+                receipt_type = ("Purchase Receipt Rejected Item" if request.rejected
+                                else "Purchase Receipt Item")
+                receipt_splits = connection.execute(
+                    """SELECT split.* FROM inventory_allocation_splits split
+                       JOIN inventory_ledger_entries ledger ON ledger.id=split.ledger_entry_id
+                       JOIN inventory_event_lines event_line ON event_line.id=ledger.event_line_id
+                      WHERE event_line.source_line_type=%s
+                        AND event_line.source_line_id=%s
+                      ORDER BY split.id""",
+                    (receipt_type, source["id"]),
+                ).fetchall()
+                if not receipt_splits and connection.execute(
+                    """SELECT tracks_batches OR tracks_serials AS tracked
+                         FROM items WHERE id=%s""",
+                    (source["item_id"],),
+                ).fetchone()["tracked"]:
+                    raise DomainError(
+                        "Legacy tracked receipt has no verified lot; reconcile it before return"
+                    )
+                allocations = []
+                if receipt_splits:
+                    if request.allocations:
+                        selections = request.allocations
+                    elif len(receipt_splits) == 1:
+                        selections = (StockAllocation(qty,
+                                                      source_split_id=receipt_splits[0]["id"]),)
+                    else:
+                        raise DomainError("Select source lots for a multi-lot purchase return")
+                    selected_by_split = {}
+                    for selected in selections:
+                        receipt_split = next((split for split in receipt_splits
+                                              if split["id"] == selected.source_split_id
+                                              or (selected.source_split_id is None
+                                                  and split["batch_id"] == selected.batch_id
+                                                  and split["serial_number_id"] == selected.serial_number_id
+                                                  and (selected.location_id is None or
+                                                       split["location_id"] == selected.location_id))), None)
+                        if not receipt_split:
+                            raise DomainError("Returned lot or serial was not received on this line")
+                        already = connection.execute(
+                            """SELECT COALESCE(-sum(quantity_change),0) AS quantity
+                                 FROM inventory_allocation_splits
+                                WHERE source_split_id=%s AND quantity_change<0""",
+                            (receipt_split["id"],),
+                        ).fetchone()["quantity"]
+                        selected_by_split[receipt_split["id"]] = (
+                            selected_by_split.get(receipt_split["id"], ZERO)
+                            + selected.quantity
+                        )
+                        if (already + selected_by_split[receipt_split["id"]] >
+                                receipt_split["quantity_change"]):
+                            raise DomainError("Purchase return exceeds the received lot")
+                        allocations.append(StockAllocation(
+                            selected.quantity, selected.location_id,
+                            batch_id=receipt_split["batch_id"],
+                            serial_number_id=receipt_split["serial_number_id"],
+                            disposition="Rejected" if request.rejected
+                            else selected.disposition,
+                            source_split_id=receipt_split["id"],
+                        ))
+                    if sum((allocation.quantity for allocation in allocations), ZERO) != qty:
+                        raise DomainError("Purchase return allocations must total the quantity")
                 inventory_lines.append(
                     InventoryLine(
                         source["item_id"], warehouse_id, -qty,
                         forced_unit_cost=source["unit_cost"],
                         source_line_type="Purchase Return Item",
                         source_line_id=return_line_id,
+                        allocations=tuple(allocations),
                     )
                 )
                 order_ids.add(source["po_id"])

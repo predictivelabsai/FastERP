@@ -12,6 +12,7 @@ from psycopg import Connection
 from .accounting import ZERO
 from .database import Database
 from .errors import DomainError, InsufficientStockError, PeriodLockedError
+from .warehouse import StockAllocation, WarehouseService
 
 
 SIX = Decimal("0.000001")
@@ -34,6 +35,9 @@ class InventoryLine:
     source_line_type: str | None = None
     source_line_id: int | None = None
     forced_unit_cost: Decimal | None = None
+    allocations: tuple[StockAllocation, ...] = ()
+    customer_id: int | None = None
+    sales_order_item_id: int | None = None
 
     def normalized(self) -> "InventoryLine":
         return InventoryLine(
@@ -48,6 +52,9 @@ class InventoryLine:
             forced_unit_cost=(
                 None if self.forced_unit_cost is None else number(self.forced_unit_cost)
             ),
+            allocations=tuple(allocation.normalized() for allocation in self.allocations),
+            customer_id=self.customer_id,
+            sales_order_item_id=self.sales_order_item_id,
         )
 
 
@@ -56,6 +63,7 @@ class InventoryService:
 
     def __init__(self, database: Database) -> None:
         self.database = database
+        self.warehouse = WarehouseService(database)
 
     @staticmethod
     def assert_period_open(connection: Connection, company_id: int, posting_date: date) -> None:
@@ -153,7 +161,7 @@ class InventoryService:
         for line_number, line in enumerate(lines, 1):
             self._post_line(
                 connection, company_id, event_id, line_number, line, posting_at,
-                event_date, voucher_code,
+                event_date, voucher_code, event_type,
             )
         return event_id
 
@@ -167,6 +175,7 @@ class InventoryService:
         posting_at,
         event_date: date,
         voucher_code: str,
+        event_type: str,
     ) -> None:
         item = connection.execute(
             """SELECT valuation_method, standard_cost, allow_negative_stock
@@ -277,6 +286,11 @@ class InventoryService:
                 json.dumps(cost_queue) if cost_queue is not None else None,
             ),
         ).fetchone()["id"]
+        self.warehouse.post_physical_line(
+            connection, company_id=company_id, event_type=event_type,
+            ledger_entry_id=ledger_id, line=line, event_date=event_date,
+            posting_at=posting_at,
+        )
         if method == "FIFO" and line.quantity > ZERO:
             connection.execute(
                 """INSERT INTO inventory_cost_layers (
@@ -398,16 +412,30 @@ class InventoryService:
                     WHERE line.event_id=%s ORDER BY line.line_number""",
                 (event_id,),
             ).fetchall()
-            lines = [
-                InventoryLine(
+            lines = []
+            for row in rows:
+                splits = connection.execute(
+                    """SELECT split.* FROM inventory_allocation_splits split
+                       JOIN inventory_ledger_entries ledger
+                         ON ledger.id=split.ledger_entry_id
+                      WHERE ledger.event_line_id=%s ORDER BY split.id""",
+                    (row["id"],),
+                ).fetchall()
+                lines.append(InventoryLine(
                     item_id=row["item_id"], warehouse_id=row["warehouse_id"],
                     quantity=-row["quantity"], unit_cost=row["valuation_rate"],
                     forced_unit_cost=row["valuation_rate"],
                     source_line_type=row["source_line_type"],
                     source_line_id=row["source_line_id"],
-                )
-                for row in rows
-            ]
+                    allocations=tuple(StockAllocation(
+                        abs(split["quantity_change"]),
+                        location_id=split["location_id"],
+                        batch_id=split["batch_id"],
+                        serial_number_id=split["serial_number_id"],
+                        disposition=split["disposition"],
+                        source_split_id=split["id"],
+                    ) for split in splits),
+                ))
             reversal = self.post_event(
                 company_id=event["company_id"], event_type="Adjustment",
                 voucher_type=f"Reversal:{event['voucher_type']}", voucher_id=voucher_id,

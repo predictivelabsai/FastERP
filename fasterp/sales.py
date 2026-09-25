@@ -11,6 +11,7 @@ from .database import Database
 from .documents import audit, next_code, require_state
 from .errors import AllocationError, DocumentStateError, DomainError
 from .inventory import InventoryLine, InventoryService, number
+from .warehouse import StockAllocation
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class OrderLine:
 class DeliveryLine:
     order_line_id: int
     quantity: Decimal
+    allocations: tuple[StockAllocation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class PaymentAllocation:
 class ReturnLine:
     delivery_line_id: int
     quantity: Decimal
+    allocations: tuple[StockAllocation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -238,6 +241,9 @@ class SalesService:
                             source["item_id"], source["warehouse_id"], -qty,
                             source_line_type="Sales Delivery Item",
                             source_line_id=delivery_line_id,
+                            allocations=request.allocations,
+                            customer_id=order["customer_id"],
+                            sales_order_item_id=source["id"],
                         )
                     )
             if inventory_lines:
@@ -661,11 +667,78 @@ class SalesService:
                     "UPDATE sales_order_items SET returned_qty=returned_qty+%s WHERE id=%s",
                     (qty, source["sales_order_item_id"]),
                 )
+                shipped_splits = connection.execute(
+                    """SELECT split.* FROM inventory_allocation_splits split
+                       JOIN inventory_ledger_entries ledger
+                         ON ledger.id=split.ledger_entry_id
+                       JOIN inventory_event_lines event_line
+                         ON event_line.id=ledger.event_line_id
+                      WHERE event_line.source_line_type='Sales Delivery Item'
+                        AND event_line.source_line_id=%s
+                      ORDER BY split.id""",
+                    (source["id"],),
+                ).fetchall()
+                if request.allocations:
+                    return_allocations = []
+                    selected_by_split = {}
+                    for allocation in request.allocations:
+                        shipped = next((split for split in shipped_splits
+                                        if split["id"] == allocation.source_split_id
+                                        or (allocation.source_split_id is None
+                                            and split["batch_id"] == allocation.batch_id
+                                            and split["serial_number_id"] == allocation.serial_number_id
+                                            and (allocation.location_id is None or
+                                                 split["location_id"] == allocation.location_id))), None)
+                        if not shipped:
+                            raise DomainError("Returned lot or serial was not shipped")
+                        already = connection.execute(
+                            """SELECT COALESCE(sum(quantity_change),0) AS quantity
+                                 FROM inventory_allocation_splits
+                                WHERE source_split_id=%s""",
+                            (shipped["id"],),
+                        ).fetchone()["quantity"]
+                        selected_by_split[shipped["id"]] = (
+                            selected_by_split.get(shipped["id"], ZERO) + allocation.quantity
+                        )
+                        if selected_by_split[shipped["id"]] + already > -shipped["quantity_change"]:
+                            raise DomainError("Returned quantity exceeds the shipped lot")
+                        return_allocations.append(StockAllocation(
+                            allocation.quantity, allocation.location_id,
+                            batch_id=shipped["batch_id"],
+                            serial_number_id=shipped["serial_number_id"],
+                            disposition="QC", source_split_id=shipped["id"],
+                        ))
+                elif len(shipped_splits) == 1 or (
+                    shipped_splits and qty == sum(-s["quantity_change"] for s in shipped_splits)
+                ):
+                    remaining = qty
+                    return_allocations = []
+                    for shipped in shipped_splits:
+                        already = connection.execute(
+                            """SELECT COALESCE(sum(quantity_change),0) AS quantity
+                                 FROM inventory_allocation_splits
+                                WHERE source_split_id=%s""",
+                            (shipped["id"],),
+                        ).fetchone()["quantity"]
+                        take = min(remaining, -shipped["quantity_change"] - already)
+                        if take <= ZERO:
+                            continue
+                        return_allocations.append(StockAllocation(
+                            take, batch_id=shipped["batch_id"],
+                            serial_number_id=shipped["serial_number_id"],
+                            disposition="QC", source_split_id=shipped["id"],
+                        ))
+                        remaining -= take
+                else:
+                    raise DomainError("Select the shipped lot for a partial return")
+                if sum((a.quantity for a in return_allocations), ZERO) != qty:
+                    raise DomainError("Return lot allocations do not total the returned quantity")
                 inventory_lines.append(
                     InventoryLine(
                         source["item_id"], source["warehouse_id"], qty,
                         source["outgoing_rate"] or source["valuation_rate"],
                         source_line_type="Sales Return Item", source_line_id=return_line_id,
+                        allocations=tuple(return_allocations),
                     )
                 )
                 order_ids.add(source["order_id"])
