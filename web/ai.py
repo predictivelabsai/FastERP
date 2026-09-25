@@ -129,16 +129,31 @@ def handle_command(text):
     return f"Unknown command `/{cmd}`. Try `/help`."
 
 
-async def stream_chat(message):
+async def stream_chat(message, session=None):
     cmd = handle_command(message)
     if cmd is not None:
         yield f"data: {json.dumps({'token': cmd})}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
         return
     system = SYSTEM_PROMPT + "\n\n" + snapshot()
+
+    import byok
+    gate = byok.begin_query(session)
+    if gate.blocked:
+        yield f"data: {json.dumps({'token': gate.gate_markdown})}\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"
+        return
+
     try:
-        async for tok in _provider_stream(system, message):
-            yield f"data: {json.dumps({'token': tok})}\n\n"
+        from langchain_core.messages import HumanMessage, SystemMessage
+        msgs = [SystemMessage(content=system), HumanMessage(content=message)]
+        async for chunk in gate.llm.astream(msgs):
+            tok = chunk.content
+            if isinstance(tok, list):
+                tok = "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in tok)
+            if tok:
+                yield f"data: {json.dumps({'token': tok})}\n\n"
+        gate.commit()
     except Exception as e:  # noqa: BLE001
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
     yield f"data: {json.dumps({'done': True})}\n\n"

@@ -248,11 +248,21 @@ def customers_list():
               ORDER BY outstanding DESC, c.name""",
         (company_id,) if company_id is not None else (),
     )
+    pg = db.using_postgres()
+    shelf_header = (Th("Min shelf life"),) if pg else ()
     tbl = Table(Thead(Tr(Th("Customer"), Th("Territory"), Th("Credit limit", cls="num"),
-                         Th("Orders", cls="num"), Th("Outstanding", cls="num"))),
+                         Th("Orders", cls="num"), Th("Outstanding", cls="num"),
+                         *shelf_header)),
                 Tbody(*[Tr(Td(Strong(c["name"])), Td(c["territory"] or "—"),
                            Td(money(c["credit_limit"]), cls="num"), Td(str(c["orders"]), cls="num"),
-                           Td(money(c["outstanding"]), cls="num")) for c in custs]), cls="tbl")
+                           Td(money(c["outstanding"]), cls="num"),
+                           *([Td(Form(
+                               Input(name="days", type="number", min="0", step="1",
+                                     value=str(c["min_remaining_shelf_life_days"]),
+                                     style="width:5rem"),
+                               Button("Save", type="submit", cls="btn"),
+                               method="post", action=f"/customers/{c['id']}/shelf-life",
+                               cls="inline-form"))] if pg else [])) for c in custs]), cls="tbl")
     return _title("Customers", f"{len(custs)} customers"), Div(tbl, cls="card")
 
 
@@ -305,12 +315,16 @@ def po_main(pid):
                         Tr(Td(""), Td(""), Td(""), Td(Strong("Total"), cls="num"), Td(Strong(money(po["total"])), cls="num"))),
                   cls="tbl")
     action_bits = []
-    if po["status"] == "Ordered":
+    if po["status"] in ("Ordered", "Partly Received"):
         action_bits.append(P("Receiving this PO increases stock and posts to the ledger "
                              "(debit Inventory / credit Accounts Payable).", cls="sub"))
-        action_bits.append(Button("📥 Receive (stock in + post GL)", cls="btn primary",
-                                   **{"hx-post": f"/purchase/{pid}/receive", "hx-target": "#po-main",
-                                      "hx-swap": "innerHTML"}))
+        if db.using_postgres():
+            action_bits.append(A("📥 Receive stock", href=f"/purchase/{pid}/receive",
+                                 cls="btn primary"))
+        else:
+            action_bits.append(Button("📥 Receive (stock in + post GL)", cls="btn primary",
+                                       **{"hx-post": f"/purchase/{pid}/receive", "hx-target": "#po-main",
+                                          "hx-swap": "innerHTML"}))
     elif po["status"] == "Received":
         action_bits.append(Div("✓ Received — stock updated and posted to the general ledger.", cls="paid-note"))
     else:

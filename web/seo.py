@@ -11,7 +11,7 @@ BASE_URL = 'https://erp.fastsme.com'
 DESCRIPTION = 'Connect sales, purchasing, inventory, invoicing, payments, projects, expenses, and the general ledger.'
 KEYWORDS = ('FastERP', 'open source business operations', 'business operations software', 'SME business operations', 'Order to cash', 'Purchasing and inventory', 'Accounting and reporting', 'FastSME', 'open source business software')
 FEATURES = ('Order to cash', 'Purchasing and inventory', 'Accounting and reporting')
-SITEMAP_PATHS = ('/', '/developers')
+SITEMAP_PATHS = ('/', '/features', '/developers')
 
 
 def seo_meta(

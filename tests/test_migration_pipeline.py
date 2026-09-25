@@ -221,7 +221,14 @@ def test_opening_trial_balance_is_balanced_and_idempotent(pipeline_db):
         "SELECT count(*) FROM inventory_tracking_entries WHERE ledger_entry_id IN "
         "(SELECT id FROM inventory_ledger_entries WHERE event_id=%s)",
         (inventory_first,),
-    ) == 3
+    ) == 2
+    assert database.scalar(
+        """SELECT count(*) FROM inventory_allocation_splits
+            WHERE ledger_entry_id IN
+              (SELECT id FROM inventory_ledger_entries WHERE event_id=%s)
+              AND batch_id IS NOT NULL AND serial_number_id IS NOT NULL""",
+        (inventory_first,),
+    ) == 2
     with pytest.raises(DomainError, match="controls changed"):
         reconciler.apply_opening_inventory(
             run,

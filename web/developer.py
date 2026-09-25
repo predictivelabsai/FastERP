@@ -91,7 +91,9 @@ def developer_page():
         Body(
             Nav(
                 A(Span(cls="dev-diamond"), Span("FastERP Developers"), href="/developers", cls="dev-brand"),
-                A("Back to product", href="/", cls="dev-btn"),
+                Div(A("Features", href="/features", cls="dev-btn"),
+                    A("Back to product", href="/", cls="dev-btn"),
+                    style="display:flex;gap:10px;"),
                 cls="dev-public-nav dev-docs",
             ),
             developer_content(),

@@ -11,10 +11,16 @@ from fasterp.database import Database
 from fasterp.accounting import AccountingService, PostingLine, amount
 from fasterp.errors import DomainError
 from fasterp.inventory import InventoryLine, InventoryService, number
+from fasterp.warehouse import StockAllocation
 
 from .staging import MigrationRunService
 from .connectors.base import canonical_hash
-from .tracking import apply_tracking
+
+
+def _as_date(value):
+    if not value:
+        return None
+    return value if isinstance(value, date) else date.fromisoformat(str(value))
 
 
 class Reconciler:
@@ -212,13 +218,15 @@ class Reconciler:
             if not run or not run["company_id"]:
                 raise DomainError("Opening inventory run must belong to a target company")
             company_id = run["company_id"]
-            item_ids = {
-                row["code"]: row["id"]
+            item_rows = {
+                row["code"]: row
                 for row in connection.execute(
-                    "SELECT id,code FROM items WHERE company_id=%s AND active=true",
+                    """SELECT id,code,tracks_batches,tracks_serials,tracks_expiry
+                         FROM items WHERE company_id=%s AND active=true""",
                     (company_id,),
                 ).fetchall()
             }
+            item_ids = {code: row["id"] for code, row in item_rows.items()}
             warehouse_ids = {
                 row["code"]: row["id"]
                 for row in connection.execute(
@@ -234,7 +242,7 @@ class Reconciler:
             ).fetchone()
         lines = []
         expected = {}
-        tracking_lines = []
+        warranty_updates = []
         for key, values in balances.items():
             try:
                 item_code, warehouse_code = key.split("|", 1)
@@ -253,15 +261,55 @@ class Reconciler:
                     raise DomainError(f"Zero opening quantity must have zero value: {key}")
                 continue
             expected[key] = {"quantity": quantity, "value": inventory_value}
-            tracking_lines.append({
-                "item_code": item_code,
-                "serials": values.get("serials") or [],
-                "batches": values.get("batches") or [],
-            })
+            item = item_rows[item_code]
+            batches = values.get("batches") or []
+            serials = values.get("serials") or []
+            batch_rows = {row["code"]: row for row in batches}
+            if item["tracks_batches"]:
+                batch_total = sum((number(row.get("quantity")) for row in batches),
+                                  Decimal("0"))
+                if batch_total != quantity:
+                    raise DomainError(f"Batch allocation quantity does not match {item_code}")
+            if item["tracks_serials"] and (
+                    quantity != quantity.to_integral_value() or
+                    len(serials) != int(quantity)):
+                raise DomainError(f"Serial allocation count does not match {item_code}")
+            allocations = []
+            if serials:
+                counts = {}
+                for serial in serials:
+                    batch_code = serial.get("batch_code")
+                    batch = batch_rows.get(batch_code) if batch_code else None
+                    if item["tracks_batches"] and batch is None:
+                        raise DomainError(f"Serial has no matching lot: {item_code}")
+                    if batch_code:
+                        counts[batch_code] = counts.get(batch_code, 0) + 1
+                    allocations.append(StockAllocation(
+                        Decimal("1"), batch_code=batch_code,
+                        manufactured_on=_as_date(batch.get("manufactured_on"))
+                            if batch else None,
+                        expires_on=_as_date(batch.get("expires_on"))
+                            if batch else None,
+                        serial_code=serial["code"],
+                    ))
+                    if serial.get("warranty_expires_on"):
+                        warranty_updates.append((serial["code"],
+                                                 serial["warranty_expires_on"]))
+                if item["tracks_batches"] and any(
+                        counts.get(code, 0) != number(row.get("quantity"))
+                        for code, row in batch_rows.items()):
+                    raise DomainError(f"Serials do not total their lots: {item_code}")
+            elif batches:
+                allocations = [StockAllocation(
+                    number(batch["quantity"]), batch_code=batch["code"],
+                    manufactured_on=_as_date(batch.get("manufactured_on")),
+                    expires_on=_as_date(batch.get("expires_on")),
+                ) for batch in batches]
             lines.append(InventoryLine(
                 item_ids[item_code], warehouse_ids[warehouse_code], quantity,
                 unit_cost=number(inventory_value / quantity),
                 source_line_type="Migration Opening Inventory",
+                allocations=tuple(allocations),
             ))
         if not lines:
             return None
@@ -301,7 +349,12 @@ class Reconciler:
                 event_date=run["history_from"], lines=lines, actor=actor,
                 connection=connection,
             )
-            apply_tracking(connection, event_id, tracking_lines)
+            for serial_code, warranty_date in warranty_updates:
+                connection.execute(
+                    """UPDATE serial_numbers SET warranty_expires_on=%s,
+                       updated_at=now() WHERE company_id=%s AND serial_code=%s""",
+                    (warranty_date, company_id, serial_code),
+                )
             connection.execute(
                 """INSERT INTO migration_reconciliation_artifacts
                        (run_id,artifact_type,content_type,content_hash,summary)

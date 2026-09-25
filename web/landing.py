@@ -42,7 +42,7 @@ CSS = """
 .lp-developers{max-width:1180px;margin:auto;padding:72px 24px;display:grid;grid-template-columns:1fr auto;align-items:center;gap:32px} .lp-developers h2{font-size:32px;letter-spacing:-.03em;margin:8px 0 12px} .lp-developers p{color:var(--muted);line-height:1.65;max-width:680px;margin:0}
 .lp-footer{max-width:1180px;margin:auto;padding:30px 24px 48px;color:var(--muted);font-size:13px;display:flex;justify-content:space-between;gap:20px}
 @media(max-width:980px){.lp-partner-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:760px){.lp-nav{height:60px}.lp-nav-actions{gap:10px}.lp-nav-actions .lp-nav-link:nth-child(2){display:none}.lp-nav-link{font-size:13px}.lp-hero{padding-top:72px}.lp-grid,.lp-partner-grid{grid-template-columns:1fr}.lp-developers{grid-template-columns:1fr}.lp-footer{flex-direction:column}}
+@media(max-width:760px){.lp-nav{height:60px}.lp-nav-actions{gap:10px}.lp-nav-actions .lp-nav-link:nth-child(2),.lp-nav-actions .lp-nav-link:nth-child(3){display:none}.lp-nav-link{font-size:13px}.lp-hero{padding-top:72px}.lp-grid,.lp-partner-grid{grid-template-columns:1fr}.lp-developers{grid-template-columns:1fr}.lp-footer{flex-direction:column}}
 """
 
 def partner_section():
@@ -65,6 +65,21 @@ def partner_section():
         id="partners", cls="lp-partners",
     )
 
+
+def public_nav(*, signed_in: bool = False):
+    return Nav(
+        A(Span("F", cls="lp-mark"), Span("FastERP"), href="/", cls="lp-brand"),
+        Div(
+            A("Features", href="/features", cls="lp-nav-link"),
+            A("Partners", href="/#partners", cls="lp-nav-link"),
+            A("Developers", href="/developers", cls="lp-nav-link"),
+            A("Workspace", href="/", cls="lp-signin") if signed_in else
+            Button("Sign In", type="button", onclick="authOpen('login')",
+                   cls="lp-signin"),
+            cls="lp-nav-actions",
+        ), cls="lp-nav",
+    )
+
 def landing_page():
     features = ['Order to cash', 'Purchasing and inventory', 'Accounting and reporting']
     return Html(
@@ -77,11 +92,7 @@ def landing_page():
              Link(rel="stylesheet", href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;750&display=swap"),
              Style(CSS + AUTH_CSS)),
         Body(
-            Nav(A(Span("F", cls="lp-mark"), Span("FastERP"), href="/", cls="lp-brand"),
-                Div(A("Partners", href="#partners", cls="lp-nav-link"),
-                    A("Developers", href="/developers", cls="lp-nav-link"),
-                    Button("Sign In", type="button", onclick="authOpen('login')", cls="lp-signin"),
-                    cls="lp-nav-actions"), cls="lp-nav"),
+            public_nav(),
             Main(
                 Section(Span("Business operations", cls="lp-kicker"), H1("One operational backbone for the whole business."),
                         P("Connect sales, purchasing, inventory, invoicing, payments, projects, expenses, and the general ledger.", cls="lp-lede"),

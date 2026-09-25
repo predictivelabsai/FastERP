@@ -115,6 +115,15 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;}
 .thinking-indicator{display:flex;align-items:center;gap:8px;padding:6px 14px;font-size:12.5px;color:var(--text-mute);align-self:flex-start;}
 .thinking-indicator .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:pulse 1.2s ease-in-out infinite;}
 @keyframes pulse{0%,100%{opacity:.35;transform:scale(.85);}50%{opacity:1;transform:scale(1.1);}}
+.wms-select,.wms-input,.wms-sqlbox{padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text);font:inherit;}
+.wms-input{min-width:190px;}.wms-sqlbox{display:block;width:100%;min-height:120px;margin-bottom:10px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;}
+.wms-query-progress{display:none;margin-top:12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;color:var(--text-dim);font-size:12px;}
+.wms-query-progress.htmx-request{display:block;}.wms-query-progress::after{content:"";display:block;height:3px;width:38%;margin-top:8px;border-radius:3px;background:var(--accent);animation:wms-progress 1.4s ease-in-out infinite;}
+@keyframes wms-progress{0%{transform:translateX(0)}50%{transform:translateX(150%)}100%{transform:translateX(0)}}
+.wms-receipt-fields{display:grid;grid-template-columns:140px minmax(180px,1fr);gap:9px;align-items:center;max-width:650px;}
+.wms-receipt-fields label{font-size:12px;color:var(--text-dim);}
+.plot{min-height:200px;}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;}
+@media(max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,1fr)}.grid-2{grid-template-columns:1fr}}
 """
 
 NAV_ITEMS = [
@@ -124,7 +133,10 @@ NAV_ITEMS = [
                  ("customers", "Customers", "🏢", "/customers")]),
     ("BUYING", [("suppliers", "Suppliers", "🏭", "/suppliers"),
                 ("purchase", "Purchase Orders", "🛒", "/purchase")]),
-    ("STOCK", [("items", "Items & Stock", "📋", "/items")]),
+    ("STOCK", [("items", "Items & Stock", "📋", "/items"),
+               ("warehouse", "Inventory Control", "🏬", "/warehouse"),
+               ("warehouse_locations", "Locations", "📍", "/warehouse/locations"),
+               ("warehouse_query", "Inventory Query Lab", "📊", "/warehouse/query")]),
     ("ACCOUNTING", [("accounting", "Overview", "🧮", "/accounting"),
                     ("accounts", "Chart of Accounts", "🗂️", "/accounting/accounts"),
                     ("expenses", "Expenses", "💳", "/accounting/expenses"),
@@ -142,6 +154,7 @@ SAMPLE_QUESTIONS = ["What's outstanding from customers?", "Which items are low o
 def topbar(env, user_email):
     right = Div(
         Button(NotStr("&laquo; Chat"), id="copilot-topbar-toggle", cls="btn", onclick="toggleCopilot()") if user_email else None,
+        A("Features", href="/features", cls="btn"),
         Span(env, cls="env-pill"),
         Span(user_email or "", style="color:var(--text-mute);font-size:12px;") if user_email else None,
         A("Logout", href="/logout", cls="btn") if user_email else None, cls="actions")
@@ -188,6 +201,7 @@ def page(active, env, user_email, thread_id, *content, right_override=None):
     return (Title("FastERP"),
             Link(rel="icon", type="image/svg+xml", href="/static/favicon.svg"),
             Script(src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"),
+            Script(src="https://cdn.plot.ly/plotly-2.35.2.min.js"),
             Style(LAYOUT_CSS),
             Div(topbar(env, user_email), left_pane(active), Div(*content, cls="center-pane"), right,
                 Div(NotStr("&lsaquo; AI Assistant"), id="copilot-reopen", onclick="toggleCopilot()"), cls="app"),
