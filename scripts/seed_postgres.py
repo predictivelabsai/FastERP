@@ -340,6 +340,26 @@ def _seed_company(database: Database, company: dict, launch_date: date) -> dict:
                  FROM inventory_ledger_entries WHERE event_id=%s""",
             (opening_date, opening_code, event_id),
         )
+        # Mirror the opening balance into the WMS physical layer so the ledger and
+        # stock_slices reconcile; without this, deliveries have no lot/location to
+        # issue from and post_physical_line raises InsufficientStockError.
+        default_location_id = connection.execute(
+            """INSERT INTO warehouse_locations
+                   (company_id,warehouse_id,code,name,location_type,pickable)
+               VALUES (%s,%s,'DEFAULT','Default location','Bin',true)
+               ON CONFLICT (company_id,warehouse_id,code)
+               DO UPDATE SET active=true RETURNING id""",
+            (company_id, warehouse_id),
+        ).fetchone()["id"]
+        connection.execute(
+            """INSERT INTO stock_slices
+                   (company_id,item_id,warehouse_id,location_id,disposition,
+                    quantity,first_received_at)
+               SELECT company_id,item_id,warehouse_id,%s,'Available',
+                      quantity_after,%s::date + time '00:00'
+                 FROM inventory_ledger_entries WHERE event_id=%s""",
+            (default_location_id, opening_date, event_id),
+        )
         connection.execute(
             "UPDATE items SET stock_qty=50,updated_at=now() WHERE company_id=%s",
             (company_id,),
@@ -558,6 +578,78 @@ def _seed_company(database: Database, company: dict, launch_date: date) -> dict:
     return {**counts, "debit": str(balance["debit"]), "credit": str(balance["credit"])}
 
 
+def _seed_warehouse_showcase(database: Database, company: dict, launch_date: date) -> None:
+    """Add cold-chain WMS detail so the warehouse workspace demonstrates lot,
+    expiry and temperature control on top of the bulk untracked opening stock.
+
+    This is additive and posts no GL: it converts a few non-operational items to
+    lot/expiry tracked, replaces their untracked opening slice with FEFO lots in a
+    refrigerated location, and records in-range temperature readings. Physical
+    quantities are preserved so stock_slices still reconcile with the ledger.
+    """
+    company_id = company["id"]
+    warehouse_id = company["warehouse_id"]
+    showcase_items = company["items"][-3:]
+    with database.transaction() as connection:
+        zone_id = connection.execute(
+            """INSERT INTO temperature_zones
+                   (company_id,warehouse_id,code,name,minimum_c,maximum_c,
+                    reading_interval_hours)
+               VALUES (%s,%s,'COLD','Chilled zone (2–8 °C)',2,8,6) RETURNING id""",
+            (company_id, warehouse_id),
+        ).fetchone()["id"]
+        cold_location_id = connection.execute(
+            """INSERT INTO warehouse_locations
+                   (company_id,warehouse_id,code,name,location_type,pickable,
+                    temperature_zone_id)
+               VALUES (%s,%s,'COLD-01','Chilled shelf','Shelf',true,%s) RETURNING id""",
+            (company_id, warehouse_id, zone_id),
+        ).fetchone()["id"]
+        for offset, item_id in enumerate(showcase_items):
+            connection.execute(
+                "UPDATE items SET tracks_batches=true,tracks_expiry=true WHERE id=%s",
+                (item_id,),
+            )
+            connection.execute(
+                "DELETE FROM stock_slices WHERE company_id=%s AND item_id=%s",
+                (company_id, item_id),
+            )
+            for lot_index, (suffix, days, quantity) in enumerate((
+                ("A", 120, 20), ("B", 300, 30),
+            )):
+                batch_id = connection.execute(
+                    """INSERT INTO batches
+                           (company_id,item_id,batch_code,manufactured_on,expires_on)
+                       VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+                    (
+                        company_id, item_id, f"LOT-{offset + 1:02d}{suffix}",
+                        launch_date - timedelta(days=40),
+                        launch_date + timedelta(days=days),
+                    ),
+                ).fetchone()["id"]
+                connection.execute(
+                    """INSERT INTO stock_slices
+                           (company_id,item_id,warehouse_id,location_id,batch_id,
+                            disposition,quantity,first_received_at)
+                       VALUES (%s,%s,%s,%s,%s,'Available',%s,%s)""",
+                    (
+                        company_id, item_id, warehouse_id, cold_location_id,
+                        batch_id, quantity,
+                        launch_date - timedelta(days=lot_index),
+                    ),
+                )
+        for day, celsius in ((6, "4.2"), (4, "5.1"), (2, "3.8"), (1, "6.0")):
+            connection.execute(
+                """INSERT INTO temperature_readings
+                       (company_id,zone_id,measured_at,temperature_c,recorded_by,note)
+                   VALUES (%s,%s,%s,%s,'fixture','Routine chilled-zone check')""",
+                (
+                    company_id, zone_id,
+                    launch_date + timedelta(days=45 - day), celsius,
+                ),
+            )
+
+
 def seed(database: Database, launch_date: date) -> dict:
     if database.scalar(
         "SELECT count(*) FROM schema_migrations WHERE version=%s",
@@ -580,6 +672,7 @@ def seed(database: Database, launch_date: date) -> dict:
         expected["companies"][company["code"]] = _seed_company(
             database, company, launch_date
         )
+        _seed_warehouse_showcase(database, company, launch_date)
     canonical = json.dumps(expected, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode()).hexdigest()
     with database.transaction() as connection:
